@@ -1,0 +1,6 @@
+*.test
+*.out
+coverage.txt
+.DS_Store
+examples/*/auto_solver
+examples/*/simple
