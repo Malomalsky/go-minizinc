@@ -99,9 +99,18 @@ func (d *Driver) detectVersion() error {
 		return newError("failed to parse version string")
 	}
 
-	major, _ := strconv.Atoi(matches[1])
-	minor, _ := strconv.Atoi(matches[2])
-	patch, _ := strconv.Atoi(matches[3])
+	major, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return wrapError("failed to parse major version", err)
+	}
+	minor, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return wrapError("failed to parse minor version", err)
+	}
+	patch, err := strconv.Atoi(matches[3])
+	if err != nil {
+		return wrapError("failed to parse patch version", err)
+	}
 
 	d.version = &Version{
 		Major: major,
