@@ -223,6 +223,7 @@ See [examples/](examples/) directory for complete examples:
 ### Solve Options
 
 - `WithAllSolutions()` - Find all solutions
+- `WithNumSolutions(n int)` - Limit number of solutions
 - `WithTimeLimit(d time.Duration)` - Set time limit
 - `WithProcesses(n int)` - Set parallel processes
 - `WithRandomSeed(seed int)` - Set random seed

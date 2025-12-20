@@ -75,6 +75,8 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 
 	var lastResult *Result
 	var finalStatus Status = StatusUnknown
+	var finalStats Statistics
+	var hasStats bool
 
 	for _, msg := range messages {
 		if msg.Type == "solution" {
@@ -83,19 +85,31 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 				return nil, err
 			}
 			lastResult = result
+		} else if msg.Type == "statistics" {
+			if stats, ok := parseStatisticsFromMessage(msg); ok {
+				finalStats = stats
+				hasStats = true
+			}
 		} else if msg.Type == "status" {
 			finalStatus = msg.Status
 		}
 	}
 
 	if lastResult == nil {
-		return &Result{
+		result := &Result{
 			Status:   finalStatus,
 			Solution: make(map[string]interface{}),
-		}, nil
+		}
+		if hasStats {
+			result.Statistics = finalStats
+		}
+		return result, nil
 	}
 
 	lastResult.Status = finalStatus
+	if hasStats {
+		lastResult.Statistics = finalStats
+	}
 	return lastResult, nil
 }
 
@@ -122,6 +136,8 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 
 	var results []*Result
 	var finalStatus Status = StatusUnknown
+	var finalStats Statistics
+	var hasStats bool
 
 	for _, msg := range messages {
 		if msg.Type == "solution" {
@@ -130,6 +146,11 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 				return nil, err
 			}
 			results = append(results, result)
+		} else if msg.Type == "statistics" {
+			if stats, ok := parseStatisticsFromMessage(msg); ok {
+				finalStats = stats
+				hasStats = true
+			}
 		} else if msg.Type == "status" {
 			finalStatus = msg.Status
 		}
@@ -137,6 +158,9 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 
 	for _, r := range results {
 		r.Status = finalStatus
+		if hasStats {
+			r.Statistics = finalStats
+		}
 	}
 
 	return results, nil
@@ -148,7 +172,16 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 	go func() {
 		defer close(ch)
 
-		results, err := inst.SolveAll(ctx, opts...)
+		options := &SolveOptions{}
+		for _, opt := range opts {
+			opt(options)
+		}
+
+		if options.NumSolutions == 0 && !options.AllSolutions {
+			options.AllSolutions = true
+		}
+
+		args, err := inst.buildArgs(options)
 		if err != nil {
 			ch <- &Result{
 				Status: StatusError,
@@ -156,12 +189,49 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			}
 			return
 		}
+		defer inst.Cleanup()
 
-		for _, result := range results {
-			select {
-			case ch <- result:
-			case <-ctx.Done():
+		var finalStatus Status = StatusUnknown
+		var latestStats Statistics
+		var hasStats bool
+
+		err = inst.driver.runJSONStream(ctx, args, func(msg streamMessage) error {
+			if stats, ok := parseStatisticsFromMessage(msg); ok {
+				latestStats = stats
+				hasStats = true
+			}
+
+			switch msg.Type {
+			case "solution":
+				result, err := parseStreamMessage(msg)
+				if err != nil {
+					return err
+				}
+				if finalStatus != StatusUnknown {
+					result.Status = finalStatus
+				}
+				if hasStats {
+					result.Statistics = latestStats
+				}
+				select {
+				case ch <- result:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			case "status":
+				finalStatus = msg.Status
+			}
+
+			return nil
+		})
+		if err != nil {
+			if ctx.Err() != nil {
 				return
+			}
+			ch <- &Result{
+				Status: StatusError,
+				Error:  err,
 			}
 		}
 	}()
@@ -184,9 +254,13 @@ func (inst *Instance) buildArgs(options *SolveOptions) ([]string, error) {
 		return nil, wrapError("failed to create temp file", err)
 	}
 	defer tmpModel.Close()
+	cleanupTemp := func() {
+		_ = os.Remove(tmpModel.Name())
+	}
 
 	code := inst.model.getCode()
 	if _, err := tmpModel.WriteString(code); err != nil {
+		cleanupTemp()
 		return nil, wrapError("failed to write model", err)
 	}
 
@@ -195,6 +269,7 @@ func (inst *Instance) buildArgs(options *SolveOptions) ([]string, error) {
 
 	dataJSON, err := inst.model.getDataJSON()
 	if err != nil {
+		cleanupTemp()
 		return nil, err
 	}
 
@@ -208,6 +283,10 @@ func (inst *Instance) buildArgs(options *SolveOptions) ([]string, error) {
 
 	if options.AllSolutions {
 		args = append(args, "-a")
+	}
+
+	if options.NumSolutions > 0 {
+		args = append(args, "--num-solutions", strconv.Itoa(options.NumSolutions))
 	}
 
 	if options.TimeLimit > 0 {

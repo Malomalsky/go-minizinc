@@ -5,14 +5,14 @@ import "time"
 type Status string
 
 const (
-	StatusUnknown           Status = "UNKNOWN"
-	StatusSatisfied         Status = "SATISFIED"
-	StatusAllSolutions      Status = "ALL_SOLUTIONS"
-	StatusOptimal           Status = "OPTIMAL_SOLUTION"
-	StatusUnsatisfiable     Status = "UNSATISFIABLE"
-	StatusUnbounded         Status = "UNBOUNDED"
-	StatusUnsatOrUnbounded  Status = "UNSATISFIABLE_OR_UNBOUNDED"
-	StatusError             Status = "ERROR"
+	StatusUnknown          Status = "UNKNOWN"
+	StatusSatisfied        Status = "SATISFIED"
+	StatusAllSolutions     Status = "ALL_SOLUTIONS"
+	StatusOptimal          Status = "OPTIMAL_SOLUTION"
+	StatusUnsatisfiable    Status = "UNSATISFIABLE"
+	StatusUnbounded        Status = "UNBOUNDED"
+	StatusUnsatOrUnbounded Status = "UNSATISFIABLE_OR_UNBOUNDED"
+	StatusError            Status = "ERROR"
 )
 
 type Method string
@@ -48,10 +48,11 @@ type Statistics struct {
 }
 
 type streamMessage struct {
-	Type     string                 `json:"type"`
-	Status   Status                 `json:"status,omitempty"`
-	Output   map[string]interface{} `json:"output,omitempty"`
-	Sections []string               `json:"sections,omitempty"`
-	Time     *float64               `json:"time,omitempty"`
-	Solution map[string]interface{} `json:"solution,omitempty"`
+	Type       string                 `json:"type"`
+	Status     Status                 `json:"status,omitempty"`
+	Output     map[string]interface{} `json:"output,omitempty"`
+	Sections   []string               `json:"sections,omitempty"`
+	Time       *float64               `json:"time,omitempty"`
+	Solution   map[string]interface{} `json:"solution,omitempty"`
+	Statistics map[string]interface{} `json:"statistics,omitempty"`
 }

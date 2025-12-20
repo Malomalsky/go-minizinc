@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type Result struct {
@@ -134,6 +135,11 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 		Solution: make(map[string]interface{}),
 	}
 
+	if msg.Type == "solution" && msg.Solution != nil {
+		result.Solution = msg.Solution
+		return result, nil
+	}
+
 	if msg.Type == "solution" && msg.Output != nil {
 		if dzn, ok := msg.Output["dzn"].(string); ok {
 			parsed, err := parseDZN(dzn)
@@ -145,4 +151,100 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 	}
 
 	return result, nil
+}
+
+func parseStatisticsFromMessage(msg streamMessage) (Statistics, bool) {
+	stats := msg.Statistics
+	if stats == nil && msg.Output != nil {
+		if raw, ok := msg.Output["statistics"]; ok {
+			if m, ok := raw.(map[string]interface{}); ok {
+				stats = m
+			}
+		}
+	}
+	if stats == nil {
+		return Statistics{}, false
+	}
+	return parseStatistics(stats), true
+}
+
+func parseStatistics(stats map[string]interface{}) Statistics {
+	var out Statistics
+
+	setInt := func(dst *int64, key string) {
+		if v, ok := stats[key]; ok {
+			if n, ok := numberToInt64(v); ok {
+				*dst = n
+			}
+		}
+	}
+
+	setDuration := func(dst *time.Duration, key string) {
+		if v, ok := stats[key]; ok {
+			if f, ok := numberToFloat64(v); ok {
+				*dst = time.Duration(f * float64(time.Second))
+			}
+		}
+	}
+
+	setInt(&out.Nodes, "nodes")
+	setInt(&out.Failures, "failures")
+	setInt(&out.RestartCount, "restarts")
+	setInt(&out.Variables, "variables")
+	setInt(&out.PropagatorRuns, "propagations")
+	setInt(&out.Propagations, "propags")
+	setInt(&out.PeakDepth, "peakDepth")
+	setInt(&out.NoGoods, "nogoods")
+	setInt(&out.Backtracks, "backjumps")
+	setInt(&out.Paths, "nPaths")
+
+	setDuration(&out.SolveTime, "solveTime")
+	setDuration(&out.InitTime, "initTime")
+	setDuration(&out.FlatTime, "flatTime")
+
+	return out
+}
+
+func numberToFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
+}
+
+func numberToInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	case json.Number:
+		i, err := n.Int64()
+		if err == nil {
+			return i, true
+		}
+		f, err := n.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return int64(f), true
+	default:
+		return 0, false
+	}
 }
