@@ -9,15 +9,15 @@ import (
 type SolverCapability string
 
 const (
-	CapabilityCP         SolverCapability = "cp"
-	CapabilityMIP        SolverCapability = "mip"
-	CapabilitySAT        SolverCapability = "sat"
-	CapabilityFloat      SolverCapability = "float"
-	CapabilityInt        SolverCapability = "int"
-	CapabilityGlobal     SolverCapability = "global"
-	CapabilityRestart    SolverCapability = "restart"
-	CapabilityThreads    SolverCapability = "threads"
-	CapabilityOptimize   SolverCapability = "optimize"
+	CapabilityCP       SolverCapability = "cp"
+	CapabilityMIP      SolverCapability = "mip"
+	CapabilitySAT      SolverCapability = "sat"
+	CapabilityFloat    SolverCapability = "float"
+	CapabilityInt      SolverCapability = "int"
+	CapabilityGlobal   SolverCapability = "global"
+	CapabilityRestart  SolverCapability = "restart"
+	CapabilityThreads  SolverCapability = "threads"
+	CapabilityOptimize SolverCapability = "optimize"
 )
 
 type ModelSize string
@@ -40,10 +40,10 @@ type ModelAnalysis struct {
 }
 
 type SolverFilter struct {
-	RequiredTags     []string
+	RequiredTags         []string
 	RequiredCapabilities []SolverCapability
-	PreferredTags    []string
-	ExcludedTags     []string
+	PreferredTags        []string
+	ExcludedTags         []string
 }
 
 func (s *Solver) HasTag(tag string) bool {
