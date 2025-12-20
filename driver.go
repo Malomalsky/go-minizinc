@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type Driver struct {
@@ -43,14 +45,20 @@ func (v *Version) AtLeast(major, minor, patch int) bool {
 	return v.Patch >= patch
 }
 
-var defaultDriver *Driver
-
-func init() {
-	defaultDriver, _ = NewDriver("")
-}
+var (
+	defaultDriver     *Driver
+	defaultDriverErr  error
+	defaultDriverOnce sync.Once
+)
 
 func DefaultDriver() (*Driver, error) {
+	defaultDriverOnce.Do(func() {
+		defaultDriver, defaultDriverErr = NewDriver("")
+	})
 	if defaultDriver == nil {
+		if defaultDriverErr != nil {
+			return nil, defaultDriverErr
+		}
 		return nil, ErrDriverNotFound
 	}
 	return defaultDriver, nil
@@ -132,14 +140,15 @@ func (d *Driver) runJSON(ctx context.Context, args []string) ([]streamMessage, e
 
 	var messages []streamMessage
 	scanner := bufio.NewScanner(&stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
-		var msg streamMessage
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		msg, err := decodeStreamMessageLine(line)
+		if err != nil {
 			return nil, wrapError("failed to parse JSON stream", err)
 		}
 		messages = append(messages, msg)
@@ -150,6 +159,86 @@ func (d *Driver) runJSON(ctx context.Context, args []string) ([]streamMessage, e
 	}
 
 	return messages, nil
+}
+
+func decodeStreamMessageLine(line string) (streamMessage, error) {
+	var msg streamMessage
+	dec := json.NewDecoder(strings.NewReader(line))
+	dec.UseNumber()
+	if err := dec.Decode(&msg); err != nil {
+		return streamMessage{}, err
+	}
+	return msg, nil
+}
+
+func (d *Driver) runJSONStream(ctx context.Context, args []string, handle func(streamMessage) error) error {
+	args = append(args, "--json-stream")
+
+	cmd := exec.CommandContext(ctx, d.executable, args...)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return wrapError("failed to capture stdout", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return wrapError("failed to capture stderr", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return wrapError("failed to start minizinc", err)
+	}
+
+	var stderrBuf bytes.Buffer
+	stderrDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&stderrBuf, stderr)
+		stderrDone <- err
+	}()
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		msg, err := decodeStreamMessageLine(line)
+		if err != nil {
+			_ = cmd.Wait()
+			<-stderrDone
+			return wrapError("failed to parse JSON stream", err)
+		}
+
+		if err := handle(msg); err != nil {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			_ = cmd.Wait()
+			<-stderrDone
+			return err
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		_ = cmd.Wait()
+		<-stderrDone
+		return wrapError("failed to read output", err)
+	}
+
+	err = cmd.Wait()
+	<-stderrDone
+	if err != nil {
+		if stderrBuf.Len() > 0 {
+			return wrapError(stderrBuf.String(), err)
+		}
+		return wrapError("minizinc execution failed", err)
+	}
+
+	return nil
 }
 
 func (d *Driver) listSolvers(ctx context.Context) ([]Solver, error) {
