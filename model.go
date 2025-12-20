@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -132,11 +133,12 @@ func (m *Model) getCode() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := ""
+	var sb strings.Builder
 	for _, fragment := range m.codeFragments {
-		result += fragment + "\n"
+		sb.WriteString(fragment)
+		sb.WriteByte('\n')
 	}
-	return result
+	return sb.String()
 }
 
 func (m *Model) getDataJSON() (string, error) {
