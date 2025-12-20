@@ -83,7 +83,7 @@ func (m *Model) Copy() *Model {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	copy := &Model{
+	cloned := &Model{
 		codeFragments: make([]string, len(m.codeFragments)),
 		dataFiles:     make([]string, len(m.dataFiles)),
 		parameters:    make(map[string]interface{}),
@@ -91,22 +91,41 @@ func (m *Model) Copy() *Model {
 	}
 
 	for i, frag := range m.codeFragments {
-		copy.codeFragments[i] = frag
+		cloned.codeFragments[i] = frag
 	}
 
 	for i, file := range m.dataFiles {
-		copy.dataFiles[i] = file
+		cloned.dataFiles[i] = file
 	}
 
 	for k, v := range m.parameters {
-		copy.parameters[k] = v
+		cloned.parameters[k] = deepCopyValue(v)
 	}
 
 	for k, v := range m.assigned {
-		copy.assigned[k] = v
+		cloned.assigned[k] = v
 	}
 
-	return copy
+	return cloned
+}
+
+func deepCopyValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case []interface{}:
+		cp := make([]interface{}, len(val))
+		for i, item := range val {
+			cp[i] = deepCopyValue(item)
+		}
+		return cp
+	case map[string]interface{}:
+		cp := make(map[string]interface{})
+		for k, item := range val {
+			cp[k] = deepCopyValue(item)
+		}
+		return cp
+	default:
+		return v
+	}
 }
 
 func (m *Model) getCode() string {
