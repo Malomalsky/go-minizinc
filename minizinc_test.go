@@ -104,7 +104,10 @@ func TestSimpleSolve(t *testing.T) {
 	model := NewModel()
 	model.AddString("var 1..10: x; solve maximize x;")
 
-	instance := NewInstance(model, solver)
+	instance, err := NewInstance(model, solver)
+	if err != nil {
+		t.Fatalf("failed to create instance: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -143,7 +146,10 @@ func TestSolveWithParams(t *testing.T) {
 		solve satisfy;
 	`)
 
-	instance := NewInstance(model, solver)
+	instance, err := NewInstance(model, solver)
+	if err != nil {
+		t.Fatalf("failed to create instance: %v", err)
+	}
 	instance.SetParam("a", 2)
 	instance.SetParam("b", 20)
 
@@ -174,7 +180,10 @@ func TestSolveAll(t *testing.T) {
 	model := NewModel()
 	model.AddString("var 1..3: x; var 1..3: y; constraint x < y; solve satisfy;")
 
-	instance := NewInstance(model, solver)
+	instance, err := NewInstance(model, solver)
+	if err != nil {
+		t.Fatalf("failed to create instance: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -214,7 +223,10 @@ func TestSolveStream(t *testing.T) {
 	model := NewModel()
 	model.AddString("var 1..5: x; solve satisfy;")
 
-	instance := NewInstance(model, solver)
+	instance, err := NewInstance(model, solver)
+	if err != nil {
+		t.Fatalf("failed to create instance: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -242,7 +254,10 @@ func TestOptions(t *testing.T) {
 	model := NewModel()
 	model.AddString("var 1..10: x; solve satisfy;")
 
-	instance := NewInstance(model, solver)
+	instance, err := NewInstance(model, solver)
+	if err != nil {
+		t.Fatalf("failed to create instance: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

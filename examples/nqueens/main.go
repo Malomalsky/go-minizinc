@@ -29,7 +29,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	instance := minizinc.NewInstance(model, solver)
+	instance, err := minizinc.NewInstance(model, solver)
+	if err != nil {
+		log.Fatal(err)
+	}
 	instance.SetParam("n", 8)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

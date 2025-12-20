@@ -14,29 +14,37 @@ type Instance struct {
 	tempFile string
 }
 
-func NewInstance(model *Model, solver *Solver) *Instance {
+func NewInstance(model *Model, solver *Solver) (*Instance, error) {
 	if model == nil {
-		return nil
+		return nil, ErrNilModel
 	}
 
 	if solver == nil {
-		solver, _ = FindSolverForModel(model)
+		var err error
+		solver, err = FindSolverForModel(model)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if solver == nil {
-		return nil
+		return nil, ErrNoSolver
 	}
 
 	driver := solver.driver
 	if driver == nil {
-		driver, _ = DefaultDriver()
+		var err error
+		driver, err = DefaultDriver()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Instance{
 		model:  model.Copy(),
 		solver: solver,
 		driver: driver,
-	}
+	}, nil
 }
 
 func NewInstanceAuto(model *Model) (*Instance, error) {
@@ -45,7 +53,7 @@ func NewInstanceAuto(model *Model) (*Instance, error) {
 		return nil, err
 	}
 
-	return NewInstance(model, solver), nil
+	return NewInstance(model, solver)
 }
 
 func (inst *Instance) SetParam(name string, value interface{}) error {

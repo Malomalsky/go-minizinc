@@ -18,7 +18,10 @@ func main() {
 	model := minizinc.NewModel()
 	model.AddString("var 1..10: x; solve maximize x;")
 
-	instance := minizinc.NewInstance(model, solver)
+	instance, err := minizinc.NewInstance(model, solver)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

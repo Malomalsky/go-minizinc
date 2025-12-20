@@ -31,6 +31,8 @@ var (
 	ErrInvalidVersion     = newError("minizinc version is too old, need 2.6.0 or higher")
 	ErrSolverNotFound     = newError("solver not found")
 	ErrInvalidModel       = newError("invalid model")
+	ErrNilModel           = newError("model is nil")
+	ErrNoSolver           = newError("no solver available")
 	ErrNoSolution         = newError("no solution found")
 	ErrExecutionFailed    = newError("minizinc execution failed")
 	ErrInvalidJSON        = newError("invalid JSON response from minizinc")
