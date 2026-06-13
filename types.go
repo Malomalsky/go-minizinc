@@ -2,6 +2,7 @@ package minizinc
 
 import "time"
 
+// Status is the solver-reported outcome of a solve.
 type Status string
 
 const (
@@ -15,14 +16,8 @@ const (
 	StatusError            Status = "ERROR"
 )
 
-type Method string
-
-const (
-	MethodSatisfy  Method = "satisfy"
-	MethodMinimize Method = "minimize"
-	MethodMaximize Method = "maximize"
-)
-
+// SolveType describes the objective of a MiniZinc model: satisfy, minimize or
+// maximize.
 type SolveType string
 
 const (
@@ -31,6 +26,10 @@ const (
 	SolveTypeMaximize SolveType = "max"
 )
 
+// Statistics aggregates the most common solver counters and timings. Fields
+// not reported by the solver remain zero. PropagatorRuns and Propagations are
+// reported under the keys "propagations" and "propags" respectively — both
+// kept because different solvers populate one or the other.
 type Statistics struct {
 	Nodes          int64         `json:"nodes,omitempty"`
 	Failures       int64         `json:"failures,omitempty"`
@@ -48,11 +47,10 @@ type Statistics struct {
 }
 
 type streamMessage struct {
-	Type       string                 `json:"type"`
-	Status     Status                 `json:"status,omitempty"`
-	Output     map[string]interface{} `json:"output,omitempty"`
-	Sections   []string               `json:"sections,omitempty"`
-	Time       *float64               `json:"time,omitempty"`
-	Solution   map[string]interface{} `json:"solution,omitempty"`
-	Statistics map[string]interface{} `json:"statistics,omitempty"`
+	Type       string         `json:"type"`
+	Status     Status         `json:"status,omitempty"`
+	Output     map[string]any `json:"output,omitempty"`
+	Sections   []string       `json:"sections,omitempty"`
+	Solution   map[string]any `json:"solution,omitempty"`
+	Statistics map[string]any `json:"statistics,omitempty"`
 }
