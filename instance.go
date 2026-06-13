@@ -142,6 +142,9 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 		if hasStats {
 			result.Statistics = finalStats
 		}
+		if options.TimeLimit > 0 && result.Status == StatusUnknown {
+			result.HitTimeLimit = true
+		}
 		return result, nil
 	}
 
@@ -150,6 +153,9 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	}
 	if hasStats {
 		lastResult.Statistics = finalStats
+	}
+	if options.TimeLimit > 0 && lastResult.Status == StatusUnknown {
+		lastResult.HitTimeLimit = true
 	}
 	return lastResult, nil
 }
@@ -215,6 +221,29 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 		for _, r := range results {
 			r.Statistics = finalStats
 		}
+	}
+	if options.TimeLimit > 0 && len(results) > 0 {
+		last := results[len(results)-1]
+		if last.Status == StatusUnknown {
+			last.HitTimeLimit = true
+		}
+	}
+
+	// Empty result with a known terminal status (UNSAT / UNBOUNDED) or a
+	// timeout deserves a synthetic Result so callers do not see an
+	// indistinguishable "no solutions" slice.
+	if len(results) == 0 && (finalStatus != StatusUnknown || options.TimeLimit > 0) {
+		r := &Result{
+			Status:   finalStatus,
+			Solution: make(map[string]any),
+		}
+		if hasStats {
+			r.Statistics = finalStats
+		}
+		if options.TimeLimit > 0 && r.Status == StatusUnknown {
+			r.HitTimeLimit = true
+		}
+		results = append(results, r)
 	}
 
 	return results, nil
@@ -325,6 +354,9 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 				pending.Statistics = latestStats
 			}
 			pending.IsIntermediate = false
+			if options.TimeLimit > 0 && pending.Status == StatusUnknown {
+				pending.HitTimeLimit = true
+			}
 			select {
 			case ch <- pending:
 			case <-ctx.Done():
@@ -333,16 +365,19 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 		}
 
 		// No solutions arrived but the solver reported a terminal status
-		// (e.g. UNSATISFIABLE, UNBOUNDED). Emit a synthetic empty Result so
-		// the consumer learns the outcome instead of seeing the channel
-		// close without explanation.
-		if finalStatus != StatusUnknown {
+		// (e.g. UNSATISFIABLE, UNBOUNDED, or UNKNOWN-after-time-limit).
+		// Emit a synthetic empty Result so the consumer learns the outcome
+		// instead of seeing the channel close without explanation.
+		if finalStatus != StatusUnknown || options.TimeLimit > 0 {
 			r := &Result{
 				Status:   finalStatus,
 				Solution: make(map[string]any),
 			}
 			if hasStats {
 				r.Statistics = latestStats
+			}
+			if options.TimeLimit > 0 && r.Status == StatusUnknown {
+				r.HitTimeLimit = true
 			}
 			select {
 			case ch <- r:

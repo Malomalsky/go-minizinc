@@ -29,6 +29,13 @@ type Result struct {
 	Error          error
 	IsIntermediate bool
 	Sections       map[string]string
+
+	// HitTimeLimit is true when WithTimeLimit was set and the solver
+	// returned Status==StatusUnknown — the cooperative-timeout signal that
+	// MiniZinc does NOT surface as an error (exit 0, empty stderr). Use
+	// this flag instead of errors.Is(err, ErrTimeout) to detect the normal
+	// time-limit path.
+	HitTimeLimit bool
 }
 
 // Section returns a named output section if reported.
@@ -187,8 +194,16 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 	}
 
 	if msg.Type == "solution" && msg.Output != nil {
-		if dzn, ok := msg.Output["dzn"].(string); ok && len(result.Solution) == 0 {
-			result.Solution = parseDZN(dzn)
+		if len(result.Solution) == 0 {
+			// Default DZN section. When the model overrides output with
+			// `output [...]`, MiniZinc writes the formatted text to "default"
+			// instead — try parsing that as DZN too. parseDZN gracefully
+			// returns an empty map when content is not DZN-shaped.
+			if dzn, ok := msg.Output["dzn"].(string); ok {
+				result.Solution = parseDZN(dzn)
+			} else if def, ok := msg.Output["default"].(string); ok {
+				result.Solution = parseDZN(def)
+			}
 		}
 		for k, v := range msg.Output {
 			if k == "dzn" {
