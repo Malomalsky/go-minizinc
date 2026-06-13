@@ -162,6 +162,19 @@ if errors.As(err, &mzErr) {
 }
 ```
 
+Categories make programmatic branching simpler:
+
+```go
+switch {
+case errors.Is(err, minizinc.ErrTimeout):
+    // retry with a longer budget
+case errors.Is(err, minizinc.ErrSyntax), errors.Is(err, minizinc.ErrType):
+    // bug in the model
+case errors.Is(err, minizinc.ErrRuntime):
+    // solver crashed
+}
+```
+
 ### Getting All Solutions
 
 ```go
@@ -178,8 +191,11 @@ for result := range instance.SolveStream(ctx) {
     if result.Error != nil {
         log.Fatal(result.Error)
     }
-    x, _ := result.GetInt("x")
-    fmt.Printf("Solution: x=%d\n", x)
+    if result.IsIntermediate {
+        fmt.Printf("improving: x=%v\n", result.Solution["x"])
+        continue
+    }
+    fmt.Printf("final %s: x=%v\n", result.Status, result.Solution["x"])
 }
 ```
 
