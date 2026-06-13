@@ -7,14 +7,17 @@ import (
 	"time"
 )
 
+// Result is one solver outcome — solution variables, terminal status, and
+// (when available) statistics. Error is populated only by SolveStream when
+// the streaming pipeline produces an error.
 type Result struct {
 	Status     Status
-	Solution   map[string]interface{}
+	Solution   map[string]any
 	Statistics Statistics
 	Error      error
 }
 
-func (r *Result) Get(name string) (interface{}, bool) {
+func (r *Result) Get(name string) (any, bool) {
 	val, ok := r.Solution[name]
 	return val, ok
 }
@@ -84,13 +87,13 @@ func (r *Result) GetString(name string) (string, error) {
 	return s, nil
 }
 
-func (r *Result) GetArray(name string) ([]interface{}, error) {
+func (r *Result) GetArray(name string) ([]any, error) {
 	val, ok := r.Get(name)
 	if !ok {
 		return nil, fmt.Errorf("variable %s not found", name)
 	}
 
-	arr, ok := val.([]interface{})
+	arr, ok := val.([]any)
 	if !ok {
 		return nil, fmt.Errorf("variable %s is not an array", name)
 	}
@@ -98,8 +101,8 @@ func (r *Result) GetArray(name string) ([]interface{}, error) {
 	return arr, nil
 }
 
-func parseDZN(dzn string) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
+func parseDZN(dzn string) map[string]any {
+	result := make(map[string]any)
 
 	lines := strings.Split(dzn, "\n")
 	for _, line := range lines {
@@ -118,7 +121,7 @@ func parseDZN(dzn string) (map[string]interface{}, error) {
 		valueStr = strings.TrimSuffix(valueStr, ";")
 		valueStr = strings.TrimSpace(valueStr)
 
-		var value interface{}
+		var value any
 		if err := json.Unmarshal([]byte(valueStr), &value); err != nil {
 			result[name] = valueStr
 		} else {
@@ -126,13 +129,13 @@ func parseDZN(dzn string) (map[string]interface{}, error) {
 		}
 	}
 
-	return result, nil
+	return result
 }
 
 func parseStreamMessage(msg streamMessage) (*Result, error) {
 	result := &Result{
 		Status:   msg.Status,
-		Solution: make(map[string]interface{}),
+		Solution: make(map[string]any),
 	}
 
 	if msg.Type == "solution" && msg.Solution != nil {
@@ -142,11 +145,7 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 
 	if msg.Type == "solution" && msg.Output != nil {
 		if dzn, ok := msg.Output["dzn"].(string); ok {
-			parsed, err := parseDZN(dzn)
-			if err != nil {
-				return nil, err
-			}
-			result.Solution = parsed
+			result.Solution = parseDZN(dzn)
 		}
 	}
 
@@ -157,7 +156,7 @@ func parseStatisticsFromMessage(msg streamMessage) (Statistics, bool) {
 	stats := msg.Statistics
 	if stats == nil && msg.Output != nil {
 		if raw, ok := msg.Output["statistics"]; ok {
-			if m, ok := raw.(map[string]interface{}); ok {
+			if m, ok := raw.(map[string]any); ok {
 				stats = m
 			}
 		}
@@ -168,7 +167,7 @@ func parseStatisticsFromMessage(msg streamMessage) (Statistics, bool) {
 	return parseStatistics(stats), true
 }
 
-func parseStatistics(stats map[string]interface{}) Statistics {
+func parseStatistics(stats map[string]any) Statistics {
 	var out Statistics
 
 	setInt := func(dst *int64, key string) {
@@ -205,7 +204,7 @@ func parseStatistics(stats map[string]interface{}) Statistics {
 	return out
 }
 
-func numberToFloat64(v interface{}) (float64, bool) {
+func numberToFloat64(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
 		return n, true
@@ -226,7 +225,7 @@ func numberToFloat64(v interface{}) (float64, bool) {
 	}
 }
 
-func numberToInt64(v interface{}) (int64, bool) {
+func numberToInt64(v any) (int64, bool) {
 	switch n := v.(type) {
 	case int:
 		return int64(n), true
