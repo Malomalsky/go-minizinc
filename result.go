@@ -1,6 +1,7 @@
 package minizinc
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -87,6 +88,26 @@ func (r *Result) GetString(name string) (string, error) {
 	return s, nil
 }
 
+// Decode populates dst from the solution map using JSON struct tags.
+// dst must be a pointer to a struct (or compatible type for json.Unmarshal).
+// Field tags follow standard `json:"name"` conventions; field names match
+// solution keys case-insensitively as json.Unmarshal does.
+func (r *Result) Decode(dst any) error {
+	if r == nil {
+		return newError("nil result")
+	}
+	data, err := json.Marshal(r.Solution)
+	if err != nil {
+		return wrapError("failed to marshal solution", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(dst); err != nil {
+		return wrapError("failed to decode solution", err)
+	}
+	return nil
+}
+
 func (r *Result) GetArray(name string) ([]any, error) {
 	val, ok := r.Get(name)
 	if !ok {
@@ -133,8 +154,12 @@ func parseDZN(dzn string) map[string]any {
 }
 
 func parseStreamMessage(msg streamMessage) (*Result, error) {
+	status := msg.Status
+	if status == "" && msg.Type == "solution" {
+		status = StatusSatisfied
+	}
 	result := &Result{
-		Status:   msg.Status,
+		Status:   status,
 		Solution: make(map[string]any),
 	}
 
