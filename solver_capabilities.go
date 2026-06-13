@@ -6,6 +6,53 @@ import (
 	"strings"
 )
 
+// stripCommentsAndStrings removes MiniZinc line comments (% ... \n), block
+// comments (/* ... */) and string literals from the source so that substring
+// analysis does not get false positives from non-code text.
+func stripCommentsAndStrings(code string) string {
+	var sb strings.Builder
+	sb.Grow(len(code))
+
+	i := 0
+	for i < len(code) {
+		c := code[i]
+		switch {
+		case c == '%':
+			for i < len(code) && code[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(code) && code[i+1] == '*':
+			i += 2
+			for i+1 < len(code) && !(code[i] == '*' && code[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(code) {
+				i += 2
+			} else {
+				i = len(code)
+			}
+		case c == '"':
+			i++
+			for i < len(code) && code[i] != '"' {
+				if code[i] == '\\' && i+1 < len(code) {
+					i += 2
+					continue
+				}
+				i++
+			}
+			if i < len(code) {
+				i++
+			}
+		default:
+			sb.WriteByte(c)
+			i++
+		}
+	}
+	return sb.String()
+}
+
+var floatVarRegexp = regexp.MustCompile(`var\s+-?\d+\.\d+`)
+
 type SolverCapability string
 
 const (
@@ -253,7 +300,7 @@ func analyzeModel(model *Model) *ModelAnalysis {
 		}
 	}
 
-	code := model.getCode()
+	code := stripCommentsAndStrings(model.getCode())
 	codeLower := strings.ToLower(code)
 
 	analysis := &ModelAnalysis{
@@ -303,9 +350,9 @@ func analyzeModel(model *Model) *ModelAnalysis {
 		}
 	}
 
-	if strings.Contains(code, "float") ||
-		strings.Contains(code, "var 0.0..") ||
-		regexp.MustCompile(`var\s+-?\d+\.\d+`).MatchString(code) {
+	if strings.Contains(codeLower, "float") ||
+		strings.Contains(codeLower, "var 0.0..") ||
+		floatVarRegexp.MatchString(codeLower) {
 		analysis.UsesFloats = true
 		analysis.RequiredCapabilities = append(analysis.RequiredCapabilities, CapabilityFloat)
 	}
