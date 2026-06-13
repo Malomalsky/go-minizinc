@@ -51,7 +51,13 @@ func stripCommentsAndStrings(code string) string {
 	return sb.String()
 }
 
-var floatVarRegexp = regexp.MustCompile(`var\s+-?\d+\.\d+`)
+var (
+	floatVarRegexp   = regexp.MustCompile(`var\s+-?\d+\.\d+`)
+	solveMaximizeRe  = regexp.MustCompile(`\bsolve\s+maximize\b`)
+	solveMinimizeRe  = regexp.MustCompile(`\bsolve\s+minimize\b`)
+	floatTypeRegexp  = regexp.MustCompile(`\bfloat\b`)
+	floatRangeRegexp = regexp.MustCompile(`\bvar\s+0\.0\.\.`)
+)
 
 type SolverCapability string
 
@@ -310,9 +316,10 @@ func analyzeModel(model *Model) *ModelAnalysis {
 		RequiredCapabilities:  make([]SolverCapability, 0),
 	}
 
-	if strings.Contains(codeLower, "solve maximize") {
+	switch {
+	case solveMaximizeRe.MatchString(codeLower):
 		analysis.SolveType = SolveTypeMaximize
-	} else if strings.Contains(codeLower, "solve minimize") {
+	case solveMinimizeRe.MatchString(codeLower):
 		analysis.SolveType = SolveTypeMinimize
 	}
 
@@ -352,8 +359,8 @@ func analyzeModel(model *Model) *ModelAnalysis {
 		}
 	}
 
-	if strings.Contains(codeLower, "float") ||
-		strings.Contains(codeLower, "var 0.0..") ||
+	if floatTypeRegexp.MatchString(codeLower) ||
+		floatRangeRegexp.MatchString(codeLower) ||
 		floatVarRegexp.MatchString(codeLower) {
 		analysis.UsesFloats = true
 		analysis.RequiredCapabilities = append(analysis.RequiredCapabilities, CapabilityFloat)
