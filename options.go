@@ -18,6 +18,7 @@ type SolveOptions struct {
 	ExtraArgs         []string
 	CommandHook       func([]string)
 	CancelGrace       time.Duration
+	HasCancelGrace    bool
 	ModelViaStdin     bool
 }
 
@@ -100,11 +101,13 @@ func WithCommandHook(hook func(args []string)) SolveOption {
 }
 
 // WithCancelGrace overrides the time the solver is allowed to exit cleanly
-// after the context is cancelled before SIGKILL. The default is two seconds;
-// pass a positive duration to lengthen or shorten it.
+// after the context is cancelled before SIGKILL. The default is two seconds.
+// Pass zero to disable cooperative cancellation — ctx cancellation will
+// hard-kill immediately.
 func WithCancelGrace(d time.Duration) SolveOption {
 	return func(o *SolveOptions) {
 		o.CancelGrace = d
+		o.HasCancelGrace = true
 	}
 }
 
