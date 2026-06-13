@@ -53,4 +53,11 @@ type streamMessage struct {
 	Sections   []string       `json:"sections,omitempty"`
 	Solution   map[string]any `json:"solution,omitempty"`
 	Statistics map[string]any `json:"statistics,omitempty"`
+
+	// Populated for type=="error" / type=="warning" messages emitted on
+	// stdout. MiniZinc 2.6+ surfaces syntax and type errors here rather
+	// than on stderr.
+	What     string `json:"what,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Location any    `json:"location,omitempty"`
 }

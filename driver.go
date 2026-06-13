@@ -184,31 +184,73 @@ func (d *Driver) runJSON(ctx context.Context, args []string, cfg runConfig) ([]s
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		return nil, newMinizincError("solve", stderr.String(), err)
+	runErr := cmd.Run()
+
+	messages, parseErr := parseJSONStream(&stdout)
+
+	if runErr != nil {
+		return nil, newMinizincError("solve", combineErrorText(messages, stderr.String()), runErr)
+	}
+	if parseErr != nil {
+		return nil, parseErr
 	}
 
+	// Even on success, a type=="error" message means something is wrong
+	// (e.g. minizinc 0-exit with a model-level error block).
+	if text := collectStreamErrors(messages); text != "" {
+		return nil, newMinizincError("solve", text, nil)
+	}
+
+	return messages, nil
+}
+
+func parseJSONStream(r *bytes.Buffer) ([]streamMessage, error) {
 	var messages []streamMessage
-	scanner := bufio.NewScanner(&stdout)
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-
 		msg, err := decodeStreamMessageLine(line)
 		if err != nil {
-			return nil, wrapError("failed to parse JSON stream", err)
+			return messages, wrapError("failed to parse JSON stream", err)
 		}
 		messages = append(messages, msg)
 	}
-
 	if err := scanner.Err(); err != nil {
-		return nil, wrapError("failed to read output", err)
+		return messages, wrapError("failed to read output", err)
 	}
-
 	return messages, nil
+}
+
+func collectStreamErrors(messages []streamMessage) string {
+	var parts []string
+	for _, m := range messages {
+		if m.Type == "error" {
+			label := m.What
+			if label == "" {
+				label = "error"
+			}
+			parts = append(parts, fmt.Sprintf("%s: %s", label, m.Message))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func combineErrorText(messages []streamMessage, stderrText string) string {
+	streamText := collectStreamErrors(messages)
+	switch {
+	case streamText == "" && stderrText == "":
+		return ""
+	case streamText == "":
+		return stderrText
+	case stderrText == "":
+		return streamText
+	default:
+		return streamText + "\n" + stderrText
+	}
 }
 
 func decodeStreamMessageLine(line string) (streamMessage, error) {
@@ -250,6 +292,8 @@ func (d *Driver) runJSONStream(ctx context.Context, args []string, cfg runConfig
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
+	var streamErrors []streamMessage
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
@@ -261,6 +305,11 @@ func (d *Driver) runJSONStream(ctx context.Context, args []string, cfg runConfig
 			_ = cmd.Wait()
 			<-stderrDone
 			return wrapError("failed to parse JSON stream", err)
+		}
+
+		if msg.Type == "error" {
+			streamErrors = append(streamErrors, msg)
+			continue
 		}
 
 		if err := handle(msg); err != nil {
@@ -282,7 +331,10 @@ func (d *Driver) runJSONStream(ctx context.Context, args []string, cfg runConfig
 	err = cmd.Wait()
 	<-stderrDone
 	if err != nil {
-		return newMinizincError("solve", stderrBuf.String(), err)
+		return newMinizincError("solve", combineErrorText(streamErrors, stderrBuf.String()), err)
+	}
+	if text := collectStreamErrors(streamErrors); text != "" {
+		return newMinizincError("solve", text, nil)
 	}
 
 	return nil
