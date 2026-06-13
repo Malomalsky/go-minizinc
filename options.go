@@ -16,6 +16,7 @@ type SolveOptions struct {
 	Verbose           bool
 	Statistics        bool
 	ExtraArgs         []string
+	CommandHook       func([]string)
 }
 
 // SolveOption mutates a SolveOptions; pass returned values to Solve.
@@ -79,5 +80,14 @@ func WithStatistics() SolveOption {
 func WithExtraArgs(args ...string) SolveOption {
 	return func(o *SolveOptions) {
 		o.ExtraArgs = append(o.ExtraArgs, args...)
+	}
+}
+
+// WithCommandHook installs a callback that receives the final argv passed to
+// the MiniZinc binary, just before exec. Useful for logging or diagnosing
+// auto-solver selection. The slice is a copy and may be retained.
+func WithCommandHook(hook func(args []string)) SolveOption {
+	return func(o *SolveOptions) {
+		o.CommandHook = hook
 	}
 }
