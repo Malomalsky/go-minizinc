@@ -145,7 +145,9 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 		return result, nil
 	}
 
-	lastResult.Status = finalStatus
+	if finalStatus != StatusUnknown {
+		lastResult.Status = finalStatus
+	}
 	if hasStats {
 		lastResult.Statistics = finalStats
 	}
@@ -206,7 +208,7 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 		}
 	}
 
-	if len(results) > 0 {
+	if len(results) > 0 && finalStatus != StatusUnknown {
 		results[len(results)-1].Status = finalStatus
 	}
 	if hasStats {
