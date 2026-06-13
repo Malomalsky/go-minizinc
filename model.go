@@ -16,10 +16,11 @@ import (
 type Model struct {
 	mu sync.RWMutex
 
-	codeFragments []string
-	dataFiles     []string
-	parameters    map[string]any
-	assigned      map[string]bool
+	codeFragments  []string
+	dataFiles      []string
+	parameters     map[string]any
+	assigned       map[string]bool
+	requiredParams []string // populated by Builder.Build; checked at solve time
 }
 
 // NewModel returns an empty Model.
@@ -99,10 +100,11 @@ func (m *Model) Copy() *Model {
 	defer m.mu.RUnlock()
 
 	cloned := &Model{
-		codeFragments: make([]string, len(m.codeFragments)),
-		dataFiles:     make([]string, len(m.dataFiles)),
-		parameters:    make(map[string]any, len(m.parameters)),
-		assigned:      make(map[string]bool, len(m.assigned)),
+		codeFragments:  make([]string, len(m.codeFragments)),
+		dataFiles:      make([]string, len(m.dataFiles)),
+		parameters:     make(map[string]any, len(m.parameters)),
+		assigned:       make(map[string]bool, len(m.assigned)),
+		requiredParams: append([]string(nil), m.requiredParams...),
 	}
 
 	copy(cloned.codeFragments, m.codeFragments)
@@ -114,6 +116,21 @@ func (m *Model) Copy() *Model {
 	maps.Copy(cloned.assigned, m.assigned)
 
 	return cloned
+}
+
+// MissingParams returns names of required parameters that have not been
+// assigned via SetParam. Empty result means the model is ready to solve as
+// far as Builder-recorded requirements go.
+func (m *Model) MissingParams() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var missing []string
+	for _, name := range m.requiredParams {
+		if !m.assigned[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func deepCopyValue(v any) any {
