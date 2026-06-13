@@ -8,3 +8,4 @@ examples/*/auto_solver
 examples/*/simple
 examples/*/streaming
 examples/*/nqueens
+examples/*/builder_nqueens

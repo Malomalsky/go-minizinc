@@ -195,12 +195,63 @@ result, err := instance.Solve(ctx,
 )
 ```
 
+## Building Models Programmatically
+
+Instead of pasting MiniZinc as strings, use the typed `Builder` API:
+
+```go
+b := minizinc.NewBuilder()
+
+n := b.IntParam("n")
+queens := b.IntArrayVarSized("queens", n, 1, 8)
+
+b.Constraint(b.AllDifferent(queens))
+
+i, j := minizinc.Var("i"), minizinc.Var("j")
+b.Constraint(minizinc.Forall(i, minizinc.Range(minizinc.Int(1), n),
+    minizinc.Forall(j, minizinc.Range(i.Add(minizinc.Int(1)), n),
+        queens.At(i).Add(i).Ne(queens.At(j).Add(j)).
+            And(queens.At(i).Sub(i).Ne(queens.At(j).Sub(j))))))
+b.Satisfy()
+
+model := b.Build()
+```
+
+Identifier collisions and invalid names panic at build time, not at solve
+time. Generated code is plain MiniZinc — `model.AddString` still works for
+fragments the DSL does not cover, and `Builder.Include` registers extra
+include files.
+
+## Solver-Specific Options
+
+Pass typed structs instead of raw flags via `WithExtraArgs`:
+
+```go
+instance.Solve(ctx,
+    minizinc.WithSolverOptions(minizinc.GecodeOptions{
+        RestartStrategy: "luby",
+        RestartScale:    100,
+        NodeLimit:       50_000,
+    }),
+)
+```
+
+`ChuffedOptions` and `CoinBCOptions` are also provided; implement
+`SolverOptions` to plug in your own.
+
+## Cooperative Cancellation
+
+By default the driver gives MiniZinc two seconds to flush statistics and
+exit cleanly after the context is cancelled before SIGKILL. Override with
+`WithCancelGrace(d)`.
+
 ## Examples
 
 See [examples/](examples/) directory for complete examples:
 
 - [simple](examples/simple/) - Basic usage
 - [auto_solver](examples/auto_solver/) - Automatic solver selection
+- [builder_nqueens](examples/builder_nqueens/) - 8-queens via the typed DSL
 
 ## API Reference
 
