@@ -18,6 +18,7 @@ type SolveOptions struct {
 	ExtraArgs         []string
 	CommandHook       func([]string)
 	CancelGrace       time.Duration
+	ModelViaStdin     bool
 }
 
 // defaultCancelGrace is the time we give MiniZinc to flush stats and exit
@@ -104,5 +105,17 @@ func WithCommandHook(hook func(args []string)) SolveOption {
 func WithCancelGrace(d time.Duration) SolveOption {
 	return func(o *SolveOptions) {
 		o.CancelGrace = d
+	}
+}
+
+// WithModelViaStdin streams the assembled model to MiniZinc via stdin
+// (--input-from-stdin) instead of writing a tmp .mzn file. Reduces disk
+// I/O and the race surface around tmp file cleanup, at the cost of
+// requiring MiniZinc 2.6+ stdin support. Safe to use only when the model
+// has no AddFile (-d) data files referenced by relative path that depend
+// on cwd resolution.
+func WithModelViaStdin() SolveOption {
+	return func(o *SolveOptions) {
+		o.ModelViaStdin = true
 	}
 }
