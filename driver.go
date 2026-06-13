@@ -14,11 +14,19 @@ import (
 	"sync"
 )
 
+// Driver wraps a discovered MiniZinc executable. A single Driver is safe for
+// concurrent use and caches the solver list to avoid re-invoking
+// `minizinc --solvers-json` on every call.
 type Driver struct {
 	executable string
 	version    *Version
+
+	solversMu     sync.Mutex
+	solvers       []Solver
+	solversLoaded bool
 }
 
+// Version is the parsed MiniZinc semantic version.
 type Version struct {
 	Major int
 	Minor int
@@ -29,6 +37,7 @@ func (v *Version) String() string {
 	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
 }
 
+// AtLeast reports whether v is at least the given semantic version.
 func (v *Version) AtLeast(major, minor, patch int) bool {
 	if v.Major > major {
 		return true
@@ -51,6 +60,8 @@ var (
 	defaultDriverOnce sync.Once
 )
 
+// DefaultDriver returns a process-wide Driver bound to the first "minizinc"
+// found on PATH. Initialization is done at most once.
 func DefaultDriver() (*Driver, error) {
 	defaultDriverOnce.Do(func() {
 		defaultDriver, defaultDriverErr = NewDriver("")
@@ -64,6 +75,9 @@ func DefaultDriver() (*Driver, error) {
 	return defaultDriver, nil
 }
 
+// NewDriver creates a Driver for the MiniZinc executable at path. If path is
+// empty, "minizinc" is looked up on PATH. The driver verifies the binary is
+// at least version 2.6.0.
 func NewDriver(path string) (*Driver, error) {
 	if path == "" {
 		path = "minizinc"
@@ -121,6 +135,7 @@ func (d *Driver) detectVersion() error {
 	return nil
 }
 
+// Version returns the detected MiniZinc version.
 func (d *Driver) Version() *Version {
 	return d.version
 }
@@ -251,6 +266,13 @@ func (d *Driver) runJSONStream(ctx context.Context, args []string, handle func(s
 }
 
 func (d *Driver) listSolvers(ctx context.Context) ([]Solver, error) {
+	d.solversMu.Lock()
+	defer d.solversMu.Unlock()
+
+	if d.solversLoaded {
+		return d.solvers, nil
+	}
+
 	out, err := d.run(ctx, []string{"--solvers-json"})
 	if err != nil {
 		return nil, wrapError("failed to list solvers", err)
@@ -265,5 +287,17 @@ func (d *Driver) listSolvers(ctx context.Context) ([]Solver, error) {
 		solvers[i].driver = d
 	}
 
+	d.solvers = solvers
+	d.solversLoaded = true
+
 	return solvers, nil
+}
+
+// RefreshSolvers discards the cached solver list so the next call hits
+// `minizinc --solvers-json` again.
+func (d *Driver) RefreshSolvers() {
+	d.solversMu.Lock()
+	d.solvers = nil
+	d.solversLoaded = false
+	d.solversMu.Unlock()
 }
