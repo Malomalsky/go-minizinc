@@ -247,6 +247,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			}
 			r := pending
 			pending = nil
+			r.IsIntermediate = true
 			if hasStats {
 				r.Statistics = latestStats
 			}
@@ -291,10 +292,19 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			return
 		}
 
-		if pending != nil && finalStatus != StatusUnknown {
-			pending.Status = finalStatus
+		if pending != nil {
+			if finalStatus != StatusUnknown {
+				pending.Status = finalStatus
+			}
+			if hasStats {
+				pending.Statistics = latestStats
+			}
+			pending.IsIntermediate = false
+			select {
+			case ch <- pending:
+			case <-ctx.Done():
+			}
 		}
-		_ = flush()
 	}()
 
 	return ch
