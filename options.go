@@ -2,12 +2,15 @@ package minizinc
 
 import "time"
 
+// SolveOptions configures a single solve invocation. Build with the
+// functional With* helpers; do not mutate directly except in tests.
 type SolveOptions struct {
 	AllSolutions      bool
 	NumSolutions      int
 	TimeLimit         time.Duration
 	Processes         int
 	RandomSeed        int
+	HasRandomSeed     bool
 	FreeSearch        bool
 	OptimizationLevel int
 	Verbose           bool
@@ -15,6 +18,7 @@ type SolveOptions struct {
 	ExtraArgs         []string
 }
 
+// SolveOption mutates a SolveOptions; pass returned values to Solve.
 type SolveOption func(*SolveOptions)
 
 func WithAllSolutions() SolveOption {
@@ -44,6 +48,7 @@ func WithProcesses(n int) SolveOption {
 func WithRandomSeed(seed int) SolveOption {
 	return func(o *SolveOptions) {
 		o.RandomSeed = seed
+		o.HasRandomSeed = true
 	}
 }
 
