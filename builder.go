@@ -116,6 +116,39 @@ func (b *Builder) IntArrayVarSized(name string, sizeParam Expr, lo, hi int) Expr
 	return ref(name)
 }
 
+// IntArray2D declares a 2-D matrix of int variables sized rows x cols.
+// Index with At2: m.At2(Int(1), Int(2)).
+func (b *Builder) IntArray2D(name string, rows, cols, lo, hi int) Expr {
+	b.registerName(name, "int 2d array")
+	b.decls = append(b.decls,
+		fmt.Sprintf("array[1..%d, 1..%d] of var %d..%d: %s;", rows, cols, lo, hi, name))
+	return ref(name)
+}
+
+// IntArray2DParamSized declares a constant 2-D int matrix sized by parameters.
+func (b *Builder) IntArray2DParamSized(name string, rows, cols Expr) Expr {
+	b.registerName(name, "int 2d array param")
+	b.decls = append(b.decls,
+		fmt.Sprintf("array[1..%s, 1..%s] of int: %s;", rows.code, cols.code, name))
+	return ref(name)
+}
+
+// IntSetVar declares `var set of lo..hi: name;`.
+func (b *Builder) IntSetVar(name string, lo, hi int) Expr {
+	b.registerName(name, "set var")
+	b.decls = append(b.decls, fmt.Sprintf("var set of %d..%d: %s;", lo, hi, name))
+	return ref(name)
+}
+
+// IntSetParam declares `set of int: name;` (set-valued model parameter).
+// Named with the Int prefix to leave SetParam available on Instance/Model for
+// the value-setting role.
+func (b *Builder) IntSetParam(name string) Expr {
+	b.registerName(name, "set param")
+	b.decls = append(b.decls, fmt.Sprintf("set of int: %s;", name))
+	return ref(name)
+}
+
 // Constraint emits `constraint <expr>;`.
 func (b *Builder) Constraint(e Expr) {
 	b.constraints = append(b.constraints, e)
@@ -123,19 +156,63 @@ func (b *Builder) Constraint(e Expr) {
 
 // Satisfy sets the solve goal to satisfaction (also the default if nothing
 // is set).
-func (b *Builder) Satisfy() {
-	b.solve = "satisfy"
+func (b *Builder) Satisfy(annotations ...Annotation) {
+	b.solve = annotateGoal("satisfy", annotations)
 }
 
 // Minimize sets the solve goal to `minimize <expr>`.
-func (b *Builder) Minimize(e Expr) {
-	b.solve = "minimize " + e.code
+func (b *Builder) Minimize(e Expr, annotations ...Annotation) {
+	b.solve = annotateGoal("minimize "+e.code, annotations)
 }
 
 // Maximize sets the solve goal to `maximize <expr>`.
-func (b *Builder) Maximize(e Expr) {
-	b.solve = "maximize " + e.code
+func (b *Builder) Maximize(e Expr, annotations ...Annotation) {
+	b.solve = annotateGoal("maximize "+e.code, annotations)
 }
+
+// Annotation is a MiniZinc search annotation: int_search(...), seq_search(...)
+// and friends. Build with IntSearch / SeqSearch / RawAnnotation.
+type Annotation struct {
+	code string
+}
+
+// annotateGoal places annotations BEFORE the goal keyword as the MiniZinc
+// grammar requires: `solve :: ann1 :: ann2 satisfy;`.
+func annotateGoal(goal string, anns []Annotation) string {
+	if len(anns) == 0 {
+		return goal
+	}
+	parts := make([]string, len(anns))
+	for i, a := range anns {
+		parts[i] = a.code
+	}
+	return ":: " + strings.Join(parts, " :: ") + " " + goal
+}
+
+// IntSearch builds `int_search(vars, varSelect, valChoice, complete)`.
+// varSelect: "input_order", "first_fail", "smallest", "dom_w_deg" …
+// valChoice: "indomain_min", "indomain_max", "indomain_random" …
+// Pass "complete" or "" for the strategy; "" omits it.
+func IntSearch(vars Expr, varSelect, valChoice, strategy string) Annotation {
+	if strategy == "" {
+		strategy = "complete"
+	}
+	return Annotation{
+		code: fmt.Sprintf("int_search(%s, %s, %s, %s)", vars.code, varSelect, valChoice, strategy),
+	}
+}
+
+// SeqSearch composes multiple annotations into a sequence search.
+func SeqSearch(anns ...Annotation) Annotation {
+	parts := make([]string, len(anns))
+	for i, a := range anns {
+		parts[i] = a.code
+	}
+	return Annotation{code: fmt.Sprintf("seq_search([%s])", strings.Join(parts, ", "))}
+}
+
+// RawAnnotation is the escape hatch for annotation forms not covered above.
+func RawAnnotation(code string) Annotation { return Annotation{code: code} }
 
 // Build assembles the recorded declarations, constraints and objective into
 // a *Model. Subsequent builder mutations have no effect on the returned
