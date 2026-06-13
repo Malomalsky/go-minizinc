@@ -102,10 +102,14 @@ func NewDriver(path string) (*Driver, error) {
 }
 
 func (d *Driver) detectVersion() error {
-	out, err := exec.Command(d.executable, "--version").Output()
-	if err != nil {
-		return wrapError("failed to get minizinc version", err)
+	cmd := exec.Command(d.executable, "--version")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return newMinizincError("version", stderr.String(), err)
 	}
+	out := stdout.Bytes()
 
 	re := regexp.MustCompile(`version (\d+)\.(\d+)\.(\d+)`)
 	matches := re.FindStringSubmatch(string(out))
@@ -140,9 +144,13 @@ func (d *Driver) Version() *Version {
 	return d.version
 }
 
-func (d *Driver) run(ctx context.Context, args []string) ([]byte, error) {
+func (d *Driver) run(ctx context.Context, args []string) (stdout, stderr []byte, err error) {
 	cmd := exec.CommandContext(ctx, d.executable, args...)
-	return cmd.CombinedOutput()
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	return outBuf.Bytes(), errBuf.Bytes(), err
 }
 
 func (d *Driver) runJSON(ctx context.Context, args []string) ([]streamMessage, error) {
@@ -156,10 +164,7 @@ func (d *Driver) runJSON(ctx context.Context, args []string) ([]streamMessage, e
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		if stderr.Len() > 0 {
-			return nil, wrapError(stderr.String(), err)
-		}
-		return nil, wrapError("minizinc execution failed", err)
+		return nil, newMinizincError("solve", stderr.String(), err)
 	}
 
 	var messages []streamMessage
@@ -256,10 +261,7 @@ func (d *Driver) runJSONStream(ctx context.Context, args []string, handle func(s
 	err = cmd.Wait()
 	<-stderrDone
 	if err != nil {
-		if stderrBuf.Len() > 0 {
-			return wrapError(stderrBuf.String(), err)
-		}
-		return wrapError("minizinc execution failed", err)
+		return newMinizincError("solve", stderrBuf.String(), err)
 	}
 
 	return nil
@@ -273,9 +275,9 @@ func (d *Driver) listSolvers(ctx context.Context) ([]Solver, error) {
 		return d.solvers, nil
 	}
 
-	out, err := d.run(ctx, []string{"--solvers-json"})
+	out, errOut, err := d.run(ctx, []string{"--solvers-json"})
 	if err != nil {
-		return nil, wrapError("failed to list solvers", err)
+		return nil, newMinizincError("list-solvers", string(errOut), err)
 	}
 
 	var solvers []Solver
