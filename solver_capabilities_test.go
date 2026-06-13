@@ -1,6 +1,8 @@
 package minizinc
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -108,12 +110,12 @@ func TestAnalyzeModel_Size(t *testing.T) {
 	smallModel.AddString("var 1..10: x; solve satisfy;")
 
 	mediumModel := NewModel()
-	code := ""
+	var sb strings.Builder
 	for i := 0; i < 150; i++ {
-		code += "var 1..10: x" + string(rune(i)) + ";\n"
+		fmt.Fprintf(&sb, "var 1..10: x%d;\n", i)
 	}
-	code += "solve satisfy;"
-	mediumModel.AddString(code)
+	sb.WriteString("solve satisfy;")
+	mediumModel.AddString(sb.String())
 
 	smallAnalysis := analyzeModel(smallModel)
 	if smallAnalysis.EstimatedSize != SizeSmall {

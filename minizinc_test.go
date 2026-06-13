@@ -273,12 +273,6 @@ func TestOptions(t *testing.T) {
 	if result == nil {
 		t.Fatal("result should not be nil")
 	}
-
-	results := []*Result{result}
-
-	if len(results) == 0 {
-		t.Fatal("should have at least one solution")
-	}
 }
 
 func TestAutoSolver(t *testing.T) {
