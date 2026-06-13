@@ -14,12 +14,18 @@ import (
 // concurrent callers but serialize internally: solve operations on the same
 // Instance run one at a time.
 type Instance struct {
-	mu       sync.Mutex
-	model    *Model
-	solver   *Solver
-	driver   *Driver
-	tempFile string
+	mu        sync.Mutex
+	model     *Model
+	solver    *Solver
+	driver    *Driver
+	tempFile  string
+	tempFiles []string
 }
+
+// cmdlineJSONLimit controls when getDataJSON output is written to a temporary
+// .json data file and passed via -d, instead of inlined with
+// --cmdline-json-data. Keep below the cross-platform ARG_MAX comfort zone.
+const cmdlineJSONLimit = 64 * 1024
 
 // NewInstance returns an Instance bound to the given solver. If solver is nil,
 // FindSolverForModel is used to pick one automatically.
@@ -188,9 +194,11 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 		}
 	}
 
-	for _, r := range results {
-		r.Status = finalStatus
-		if hasStats {
+	if len(results) > 0 {
+		results[len(results)-1].Status = finalStatus
+	}
+	if hasStats {
+		for _, r := range results {
 			r.Statistics = finalStats
 		}
 	}
@@ -231,6 +239,24 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 		var finalStatus = StatusUnknown
 		var latestStats Statistics
 		var hasStats bool
+		var pending *Result
+
+		flush := func() error {
+			if pending == nil {
+				return nil
+			}
+			r := pending
+			pending = nil
+			if hasStats {
+				r.Statistics = latestStats
+			}
+			select {
+			case ch <- r:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 
 		err = inst.driver.runJSONStream(ctx, args, func(msg streamMessage) error {
 			switch msg.Type {
@@ -244,18 +270,10 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 				if err != nil {
 					return err
 				}
-				if finalStatus != StatusUnknown {
-					result.Status = finalStatus
+				if err := flush(); err != nil {
+					return err
 				}
-				if hasStats {
-					result.Statistics = latestStats
-				}
-				select {
-				case ch <- result:
-					return nil
-				case <-ctx.Done():
-					return ctx.Err()
-				}
+				pending = result
 			case "status":
 				finalStatus = msg.Status
 			}
@@ -270,7 +288,13 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			case ch <- &Result{Status: StatusError, Error: err}:
 			case <-ctx.Done():
 			}
+			return
 		}
+
+		if pending != nil && finalStatus != StatusUnknown {
+			pending.Status = finalStatus
+		}
+		_ = flush()
 	}()
 
 	return ch
@@ -286,15 +310,27 @@ func (inst *Instance) Cleanup() error {
 }
 
 func (inst *Instance) cleanupLocked() error {
-	path := inst.tempFile
+	paths := append(inst.tempFiles, "")
+	if inst.tempFile != "" {
+		paths[len(paths)-1] = inst.tempFile
+	} else {
+		paths = paths[:len(paths)-1]
+	}
 	inst.tempFile = ""
-	if path == "" {
-		return nil
+	inst.tempFiles = nil
+
+	var firstErr error
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return nil
+	return firstErr
 }
 
 func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, error) {
@@ -327,7 +363,17 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, error) {
 	}
 
 	if dataJSON != "" {
-		args = append(args, "--cmdline-json-data", dataJSON)
+		if len(dataJSON) > cmdlineJSONLimit {
+			dataPath, err := writeTempJSON(dataJSON)
+			if err != nil {
+				_ = os.Remove(tmpName)
+				return nil, err
+			}
+			inst.tempFiles = append(inst.tempFiles, dataPath)
+			args = append(args, "-d", dataPath)
+		} else {
+			args = append(args, "--cmdline-json-data", dataJSON)
+		}
 	}
 
 	for _, dataFile := range inst.model.dataFiles {
@@ -375,5 +421,27 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, error) {
 	args = append(args, tmpName)
 
 	inst.tempFile = tmpName
+
+	if options.CommandHook != nil {
+		options.CommandHook(append([]string(nil), args...))
+	}
 	return args, nil
+}
+
+func writeTempJSON(data string) (string, error) {
+	f, err := os.CreateTemp("", "minizinc-data-*.json")
+	if err != nil {
+		return "", wrapError("failed to create temp data file", err)
+	}
+	name := f.Name()
+	if _, err := f.WriteString(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return "", wrapError("failed to write temp data file", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", wrapError("failed to close temp data file", err)
+	}
+	return name, nil
 }
