@@ -327,6 +327,25 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			case ch <- pending:
 			case <-ctx.Done():
 			}
+			return
+		}
+
+		// No solutions arrived but the solver reported a terminal status
+		// (e.g. UNSATISFIABLE, UNBOUNDED). Emit a synthetic empty Result so
+		// the consumer learns the outcome instead of seeing the channel
+		// close without explanation.
+		if finalStatus != StatusUnknown {
+			r := &Result{
+				Status:   finalStatus,
+				Solution: make(map[string]any),
+			}
+			if hasStats {
+				r.Statistics = latestStats
+			}
+			select {
+			case ch <- r:
+			case <-ctx.Done():
+			}
 		}
 	}()
 
@@ -478,11 +497,11 @@ func writeTempModel(code string) (string, error) {
 }
 
 func runConfigFor(options *SolveOptions) runConfig {
-	cfg := runConfig{grace: options.CancelGrace}
-	if cfg.grace == 0 {
-		cfg.grace = defaultCancelGrace
+	grace := defaultCancelGrace
+	if options.HasCancelGrace {
+		grace = options.CancelGrace
 	}
-	return cfg
+	return runConfig{grace: grace}
 }
 
 func writeTempJSON(data string) (string, error) {
