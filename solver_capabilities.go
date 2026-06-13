@@ -329,15 +329,17 @@ func analyzeModel(model *Model) *ModelAnalysis {
 		"set of", "var set", "card", "union", "intersect", "diff",
 	}
 
+	// Look only for `name(` so that identifiers containing the same string
+	// (e.g. a variable called all_different_count) do not trigger.
 	for _, g := range globalConstraints {
-		if strings.Contains(codeLower, g) {
+		if strings.Contains(codeLower, g+"(") {
 			analysis.HasGlobalConstraints = true
 			analysis.GlobalConstraintsUsed = append(analysis.GlobalConstraintsUsed, g)
 		}
 	}
 
 	for _, s := range schedulingConstraints {
-		if strings.Contains(codeLower, s) {
+		if strings.Contains(codeLower, s+"(") {
 			analysis.HasScheduling = true
 			analysis.HasGlobalConstraints = true
 			analysis.GlobalConstraintsUsed = append(analysis.GlobalConstraintsUsed, s)
