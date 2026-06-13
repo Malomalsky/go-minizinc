@@ -1,6 +1,7 @@
 package minizinc
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -198,6 +199,110 @@ func TestRunConfigFor_DefaultsGrace(t *testing.T) {
 	cfg = runConfigFor(&SolveOptions{CancelGrace: 500 * time.Millisecond})
 	if cfg.grace != 500*time.Millisecond {
 		t.Errorf("expected user grace, got %v", cfg.grace)
+	}
+}
+
+func TestBuilder_IntArray2D(t *testing.T) {
+	b := NewBuilder()
+	m := b.IntArray2D("m", 3, 4, 0, 9)
+	b.Constraint(m.At2(Int(1), Int(2)).Eq(Int(5)))
+	b.Satisfy()
+
+	got := b.Build().getCode()
+	for _, want := range []string{
+		"array[1..3, 1..4] of var 0..9: m;",
+		"constraint (m[1,2] = 5);",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuilder_SetVarAndParam(t *testing.T) {
+	b := NewBuilder()
+	s := b.IntSetVar("s", 1, 10)
+	p := b.IntSetParam("p")
+	_ = s
+	_ = p
+	b.Satisfy()
+	got := b.Build().getCode()
+	for _, want := range []string{
+		"var set of 1..10: s;",
+		"set of int: p;",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuilder_AnnotationsOnSolve(t *testing.T) {
+	b := NewBuilder()
+	xs := b.IntArray("xs", 5, 1, 5)
+	ann := IntSearch(xs, "first_fail", "indomain_min", "")
+	b.Satisfy(ann)
+	got := b.Build().getCode()
+	want := "solve :: int_search(xs, first_fail, indomain_min, complete) satisfy;"
+	if !strings.Contains(got, want) {
+		t.Errorf("missing %q in:\n%s", want, got)
+	}
+}
+
+func TestBuilder_SeqSearch(t *testing.T) {
+	b := NewBuilder()
+	xs := b.IntArray("xs", 3, 1, 3)
+	ys := b.IntArray("ys", 3, 1, 3)
+	a1 := IntSearch(xs, "first_fail", "indomain_min", "")
+	a2 := IntSearch(ys, "input_order", "indomain_max", "")
+	b.Maximize(Sum(xs), SeqSearch(a1, a2))
+	got := b.Build().getCode()
+	want := "seq_search(["
+	if !strings.Contains(got, want) {
+		t.Errorf("missing seq_search wrapper in:\n%s", got)
+	}
+}
+
+func TestClassifyStderr(t *testing.T) {
+	cases := []struct {
+		stderr string
+		want   ErrorCategory
+	}{
+		{"", CategoryUnknown},
+		{"Error: type error: x has wrong type", CategoryType},
+		{"syntax error at line 1", CategorySyntax},
+		{"Time limit exceeded", CategoryTimeout},
+		{"Solver timed out at 30s", CategoryTimeout},
+		{"Aborted by signal", CategoryRuntime},
+		{"Segmentation fault", CategoryRuntime},
+		{"random other message", CategoryUnknown},
+	}
+	for _, tc := range cases {
+		if got := classifyStderr(tc.stderr); got != tc.want {
+			t.Errorf("classify(%q): got %v, want %v", tc.stderr, got, tc.want)
+		}
+	}
+}
+
+func TestMinizincError_Is_BranchesByCategory(t *testing.T) {
+	cases := []struct {
+		cat    ErrorCategory
+		target error
+	}{
+		{CategoryTimeout, ErrTimeout},
+		{CategorySyntax, ErrSyntax},
+		{CategoryType, ErrType},
+		{CategoryRuntime, ErrRuntime},
+	}
+	for _, tc := range cases {
+		e := &MinizincError{Category: tc.cat}
+		if !errors.Is(e, tc.target) {
+			t.Errorf("category=%v should match %v", tc.cat, tc.target)
+		}
+	}
+	other := &MinizincError{Category: CategoryUnknown}
+	if errors.Is(other, ErrTimeout) {
+		t.Error("Unknown category should not match ErrTimeout")
 	}
 }
 
