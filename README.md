@@ -10,7 +10,7 @@ go get github.com/Malomalsky/go-minizinc
 
 ## Requirements
 
-- Go 1.18 or higher
+- Go 1.21 or higher
 - MiniZinc 2.6.0 or higher installed and available in PATH
 
 ## Quick Start
