@@ -17,12 +17,24 @@ import (
 // during optimization) and false for the last result, which carries the
 // terminal Status. Consumers that only care about the final answer can
 // filter on !IsIntermediate.
+//
+// Sections collects any string-valued entries reported by MiniZinc's
+// `output [...]` / `output_to_section()` in the solution message, keyed by
+// section name. The default "dzn" section is consumed to populate Solution
+// and is NOT duplicated here.
 type Result struct {
 	Status         Status
 	Solution       map[string]any
 	Statistics     Statistics
 	Error          error
 	IsIntermediate bool
+	Sections       map[string]string
+}
+
+// Section returns a named output section if reported.
+func (r *Result) Section(name string) (string, bool) {
+	v, ok := r.Sections[name]
+	return v, ok
 }
 
 func (r *Result) Get(name string) (any, bool) {
@@ -172,12 +184,22 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 
 	if msg.Type == "solution" && msg.Solution != nil {
 		result.Solution = msg.Solution
-		return result, nil
 	}
 
 	if msg.Type == "solution" && msg.Output != nil {
-		if dzn, ok := msg.Output["dzn"].(string); ok {
+		if dzn, ok := msg.Output["dzn"].(string); ok && len(result.Solution) == 0 {
 			result.Solution = parseDZN(dzn)
+		}
+		for k, v := range msg.Output {
+			if k == "dzn" {
+				continue
+			}
+			if s, ok := v.(string); ok {
+				if result.Sections == nil {
+					result.Sections = make(map[string]string)
+				}
+				result.Sections[k] = s
+			}
 		}
 	}
 
