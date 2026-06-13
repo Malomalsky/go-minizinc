@@ -44,6 +44,18 @@ var (
 	ErrMultipleAssignment = newError("parameter already assigned")
 )
 
+// MissingParamsError is returned by Solve when the model was built via the
+// Builder DSL and one or more Builder-declared parameters lack values. It
+// names every missing parameter at once so the caller can fix them in a
+// single round trip.
+type MissingParamsError struct {
+	Missing []string
+}
+
+func (e *MissingParamsError) Error() string {
+	return "minizinc: required parameters not set: " + strings.Join(e.Missing, ", ")
+}
+
 // ErrorCategory classifies a MinizincError by the kind of underlying failure
 // the stderr suggests. Use errors.Is with one of the sentinel values below to
 // branch on the category programmatically.
