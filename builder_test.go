@@ -413,6 +413,98 @@ func TestMissingParamsError_Message(t *testing.T) {
 	}
 }
 
+func TestAnalyzeModel_SolveBoundaries(t *testing.T) {
+	// Identifier containing the literal "solve maximize" cannot exist because
+	// MiniZinc identifiers do not have spaces — but with word boundaries we
+	// guard against any other substring trap of the same shape (e.g. inside
+	// stripped string artifacts that survived).
+	m := NewModel()
+	m.AddString(`
+		var 1..10: solve_max_count;
+		solve satisfy;
+	`)
+	a := analyzeModel(m)
+	if a.SolveType != SolveTypeSatisfy {
+		t.Errorf("expected satisfy, got %v", a.SolveType)
+	}
+
+	m2 := NewModel()
+	m2.AddString(`
+		var 1..10: x;
+		solve maximize x;
+	`)
+	if analyzeModel(m2).SolveType != SolveTypeMaximize {
+		t.Error("real solve maximize should match")
+	}
+}
+
+func TestAnalyzeModel_FloatWordBoundary(t *testing.T) {
+	// `floatation_count` should NOT trigger float capability.
+	m := NewModel()
+	m.AddString(`
+		var 1..10: floatation_count;
+		solve satisfy;
+	`)
+	a := analyzeModel(m)
+	if a.UsesFloats {
+		t.Error("substring 'float' in identifier should not trigger UsesFloats")
+	}
+
+	// Real float var should trigger.
+	m2 := NewModel()
+	m2.AddString(`
+		var float: y;
+		solve satisfy;
+	`)
+	if !analyzeModel(m2).UsesFloats {
+		t.Error("real var float should trigger UsesFloats")
+	}
+}
+
+func TestParseStreamMessage_FallbackToDefaultSection(t *testing.T) {
+	// MiniZinc emits formatted dzn-like text under "default" when the model
+	// has its own output [...] block. parseStreamMessage should fall back
+	// to parsing that as DZN.
+	msg := streamMessage{
+		Type: "solution",
+		Output: map[string]any{
+			"default": "x = 42;\n",
+		},
+	}
+	r, err := parseStreamMessage(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, ok := r.Solution["x"]
+	if !ok {
+		t.Fatalf("Solution should contain x: %v", r.Solution)
+	}
+	// parseDZN returns the parsed JSON value (int).
+	if n, ok := v.(float64); !ok || n != 42 {
+		// allow either int or float64 because of json unmarshal
+		if n2, ok2 := v.(int); !ok2 || n2 != 42 {
+			t.Errorf("expected x=42, got %v (%T)", v, v)
+		}
+	}
+
+	// Non-DZN-shaped "default" leaves Solution empty.
+	msg2 := streamMessage{
+		Type:   "solution",
+		Output: map[string]any{"default": "hello world\n"},
+	}
+	r2, _ := parseStreamMessage(msg2)
+	if len(r2.Solution) != 0 {
+		t.Errorf("non-DZN default should leave Solution empty, got %v", r2.Solution)
+	}
+}
+
+func TestResult_HitTimeLimit_Field(t *testing.T) {
+	r := &Result{HitTimeLimit: true, Status: StatusUnknown}
+	if !r.HitTimeLimit {
+		t.Fatal("flag not honored")
+	}
+}
+
 func TestCollectStreamErrors(t *testing.T) {
 	msgs := []streamMessage{
 		{Type: "solution", Solution: map[string]any{"x": 1}},
