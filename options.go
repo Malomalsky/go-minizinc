@@ -17,7 +17,13 @@ type SolveOptions struct {
 	Statistics        bool
 	ExtraArgs         []string
 	CommandHook       func([]string)
+	CancelGrace       time.Duration
 }
+
+// defaultCancelGrace is the time we give MiniZinc to flush stats and exit
+// cleanly after receiving SIGTERM when the context is cancelled. The Go
+// runtime escalates to SIGKILL once this elapses.
+const defaultCancelGrace = 2 * time.Second
 
 // SolveOption mutates a SolveOptions; pass returned values to Solve.
 type SolveOption func(*SolveOptions)
@@ -89,5 +95,14 @@ func WithExtraArgs(args ...string) SolveOption {
 func WithCommandHook(hook func(args []string)) SolveOption {
 	return func(o *SolveOptions) {
 		o.CommandHook = hook
+	}
+}
+
+// WithCancelGrace overrides the time the solver is allowed to exit cleanly
+// after the context is cancelled before SIGKILL. The default is two seconds;
+// pass a positive duration to lengthen or shorten it.
+func WithCancelGrace(d time.Duration) SolveOption {
+	return func(o *SolveOptions) {
+		o.CancelGrace = d
 	}
 }

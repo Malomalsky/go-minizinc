@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 // Driver wraps a discovered MiniZinc executable. A single Driver is safe for
@@ -153,10 +155,35 @@ func (d *Driver) run(ctx context.Context, args []string) (stdout, stderr []byte,
 	return outBuf.Bytes(), errBuf.Bytes(), err
 }
 
-func (d *Driver) runJSON(ctx context.Context, args []string) ([]streamMessage, error) {
+// runConfig carries optional knobs across runJSON/runJSONStream so the call
+// sites can stay readable while we feed in things like stdin payloads and the
+// cooperative cancel grace period.
+type runConfig struct {
+	stdin []byte
+	grace time.Duration
+}
+
+func (d *Driver) newCmd(ctx context.Context, args []string, cfg runConfig) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, d.executable, args...)
+	if cfg.grace > 0 {
+		cmd.Cancel = func() error {
+			if cmd.Process != nil {
+				return cmd.Process.Signal(syscall.SIGTERM)
+			}
+			return nil
+		}
+		cmd.WaitDelay = cfg.grace
+	}
+	if cfg.stdin != nil {
+		cmd.Stdin = bytes.NewReader(cfg.stdin)
+	}
+	return cmd
+}
+
+func (d *Driver) runJSON(ctx context.Context, args []string, cfg runConfig) ([]streamMessage, error) {
 	args = append(args, "--json-stream")
 
-	cmd := exec.CommandContext(ctx, d.executable, args...)
+	cmd := d.newCmd(ctx, args, cfg)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -200,10 +227,10 @@ func decodeStreamMessageLine(line string) (streamMessage, error) {
 	return msg, nil
 }
 
-func (d *Driver) runJSONStream(ctx context.Context, args []string, handle func(streamMessage) error) error {
+func (d *Driver) runJSONStream(ctx context.Context, args []string, cfg runConfig, handle func(streamMessage) error) error {
 	args = append(args, "--json-stream")
 
-	cmd := exec.CommandContext(ctx, d.executable, args...)
+	cmd := d.newCmd(ctx, args, cfg)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

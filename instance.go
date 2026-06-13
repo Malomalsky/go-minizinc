@@ -100,7 +100,7 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	}
 	defer inst.cleanupLocked()
 
-	messages, err := inst.driver.runJSON(ctx, args)
+	messages, err := inst.driver.runJSON(ctx, args, runConfigFor(options))
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +166,7 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	}
 	defer inst.cleanupLocked()
 
-	messages, err := inst.driver.runJSON(ctx, args)
+	messages, err := inst.driver.runJSON(ctx, args, runConfigFor(options))
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +258,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			}
 		}
 
-		err = inst.driver.runJSONStream(ctx, args, func(msg streamMessage) error {
+		err = inst.driver.runJSONStream(ctx, args, runConfigFor(options), func(msg streamMessage) error {
 			switch msg.Type {
 			case "statistics":
 				if stats, ok := parseStatisticsFromMessage(msg); ok {
@@ -426,6 +426,14 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, error) {
 		options.CommandHook(append([]string(nil), args...))
 	}
 	return args, nil
+}
+
+func runConfigFor(options *SolveOptions) runConfig {
+	cfg := runConfig{grace: options.CancelGrace}
+	if cfg.grace == 0 {
+		cfg.grace = defaultCancelGrace
+	}
+	return cfg
 }
 
 func writeTempJSON(data string) (string, error) {
