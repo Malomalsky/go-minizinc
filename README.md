@@ -138,6 +138,30 @@ y, err := result.GetFloat("y")
 arr, err := result.GetArray("array")
 ```
 
+### Decoding into Structs
+
+```go
+var out struct {
+    X      int   `json:"x"`
+    Queens []int `json:"queens"`
+}
+if err := result.Decode(&out); err != nil {
+    log.Fatal(err)
+}
+```
+
+### Typed Errors
+
+CLI failures unwrap to `*minizinc.MinizincError` which exposes the stage,
+verbatim stderr and exit code so callers can branch on the underlying cause:
+
+```go
+var mzErr *minizinc.MinizincError
+if errors.As(err, &mzErr) {
+    log.Printf("minizinc %s failed (exit %d): %s", mzErr.Stage, mzErr.ExitCode, mzErr.Stderr)
+}
+```
+
 ### Getting All Solutions
 
 ```go
@@ -207,12 +231,13 @@ See [examples/](examples/) directory for complete examples:
 - `Cleanup() error` - Remove temporary files
 
 **Result:**
-- `Get(name string) (interface{}, bool)` - Get raw value
+- `Get(name string) (any, bool)` - Get raw value
 - `GetInt(name string) (int, error)` - Get integer
 - `GetFloat(name string) (float64, error)` - Get float
 - `GetBool(name string) (bool, error)` - Get boolean
 - `GetString(name string) (string, error)` - Get string
-- `GetArray(name string) ([]interface{}, error)` - Get array
+- `GetArray(name string) ([]any, error)` - Get array
+- `Decode(dst any) error` - Decode the solution map into a struct via `json:` tags
 
 **Result fields:**
 - `Status` - Solution status (OPTIMAL_SOLUTION, UNSATISFIABLE, etc.)
@@ -232,6 +257,7 @@ See [examples/](examples/) directory for complete examples:
 - `WithVerbose()` - Enable verbose output
 - `WithStatistics()` - Enable statistics
 - `WithExtraArgs(args ...string)` - Add custom arguments
+- `WithCommandHook(func([]string))` - Inspect the final CLI argv before exec
 
 ## Smart Solver Selection
 
