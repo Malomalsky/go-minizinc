@@ -238,6 +238,33 @@ time. Generated code is plain MiniZinc — `model.AddString` still works for
 fragments the DSL does not cover, and `Builder.Include` registers extra
 include files.
 
+### Comprehensions and Generators
+
+```go
+i, j := minizinc.Var("i"), minizinc.Var("j")
+// [i*2 | i in 1..n where (i mod 2 = 0)]
+even := minizinc.Comprehension(i.Mul(minizinc.Int(2)),
+    minizinc.InWhere(i, minizinc.Range(minizinc.Int(1), n),
+        i.Mod(minizinc.Int(2)).Eq(minizinc.Int(0))))
+
+// forall(i in 1..n, j in 1..n where i < j)(queens[i] != queens[j])
+b.Constraint(minizinc.ForallG(
+    queens.At(i).Ne(queens.At(j)),
+    minizinc.In(i, minizinc.Range(minizinc.Int(1), n)),
+    minizinc.InWhere(j, minizinc.Range(minizinc.Int(1), n), i.Lt(j)),
+))
+```
+
+`ConjOf` / `DisjOf` collapse a list of expressions into a single boolean,
+which is handy for multi-constraint `forall` bodies.
+
+### Required Parameter Validation
+
+Parameters declared via `IntParam` / `FloatParam` / `BoolParam` /
+`IntSetParam` / `IntArrayParamSized` are tracked as required. `Solve` returns
+a `*MissingParamsError` listing the unset names before any subprocess runs.
+Inspect ahead of time with `model.MissingParams()`.
+
 ## Solver-Specific Options
 
 Pass typed structs instead of raw flags via `WithExtraArgs`:
@@ -254,6 +281,20 @@ instance.Solve(ctx,
 
 `ChuffedOptions` and `CoinBCOptions` are also provided; implement
 `SolverOptions` to plug in your own.
+
+## Model via stdin
+
+By default the assembled model is written to a temporary `.mzn` file. Pass
+`WithModelViaStdin()` to stream it through `--input-from-stdin` instead —
+the option avoids the tmp file (and its lifecycle bookkeeping) at the cost
+of requiring MiniZinc ≥ 2.6's stdin support.
+
+## Output Sections
+
+When the model uses MiniZinc's `output [...]` or `output_to_section()`,
+every string-valued section reaches `Result.Sections`. Access with
+`result.Section("explain")`. The default `dzn` section is consumed to fill
+`Result.Solution`.
 
 ## Cooperative Cancellation
 
