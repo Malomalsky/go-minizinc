@@ -166,14 +166,19 @@ Categories make programmatic branching simpler:
 
 ```go
 switch {
-case errors.Is(err, minizinc.ErrTimeout):
-    // retry with a longer budget
 case errors.Is(err, minizinc.ErrSyntax), errors.Is(err, minizinc.ErrType):
     // bug in the model
 case errors.Is(err, minizinc.ErrRuntime):
     // solver crashed
 }
 ```
+
+**Note on timeouts**: MiniZinc's `--time-limit` (set via `WithTimeLimit`)
+expires with `exit=0` and `Result.Status == StatusUnknown` — no error is
+raised, so `ErrTimeout` does not fire for the normal cooperative timeout
+path. Check `result.Status == minizinc.StatusUnknown` after a bounded solve.
+`ErrTimeout` remains for solver-emitted timeout messages that some
+configurations do produce on stderr.
 
 ### Getting All Solutions
 
@@ -295,6 +300,13 @@ When the model uses MiniZinc's `output [...]` or `output_to_section()`,
 every string-valued section reaches `Result.Sections`. Access with
 `result.Section("explain")`. The default `dzn` section is consumed to fill
 `Result.Solution`.
+
+**Caveat**: a model that defines its own `output [...]` REPLACES MiniZinc's
+default DZN output. In that case `Result.Solution` will be empty and you
+must read values via `result.Section("default")` (or whatever section name
+you used). To keep `Solution` populated alongside human-readable output,
+use `output_to_section("explain", [...])` and leave the default `dzn`
+section alone.
 
 ## Cooperative Cancellation
 
