@@ -2,18 +2,27 @@ package minizinc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strconv"
+	"sync"
 )
 
+// Instance ties a Model to a Solver and a Driver. Methods are safe for
+// concurrent callers but serialize internally: solve operations on the same
+// Instance run one at a time.
 type Instance struct {
+	mu       sync.Mutex
 	model    *Model
 	solver   *Solver
 	driver   *Driver
 	tempFile string
 }
 
+// NewInstance returns an Instance bound to the given solver. If solver is nil,
+// FindSolverForModel is used to pick one automatically.
 func NewInstance(model *Model, solver *Solver) (*Instance, error) {
 	if model == nil {
 		return nil, ErrNilModel
@@ -47,6 +56,8 @@ func NewInstance(model *Model, solver *Solver) (*Instance, error) {
 	}, nil
 }
 
+// NewInstanceAuto picks the best solver via FindSolverForModel and returns an
+// Instance bound to it.
 func NewInstanceAuto(model *Model) (*Instance, error) {
 	solver, err := FindSolverForModel(model)
 	if err != nil {
@@ -56,25 +67,32 @@ func NewInstanceAuto(model *Model) (*Instance, error) {
 	return NewInstance(model, solver)
 }
 
-func (inst *Instance) SetParam(name string, value interface{}) error {
+// SetParam sets a parameter on the underlying model copy held by this Instance.
+func (inst *Instance) SetParam(name string, value any) error {
 	return inst.model.SetParam(name, value)
 }
 
-func (inst *Instance) GetParam(name string) (interface{}, bool) {
+// GetParam returns a parameter from the underlying model copy.
+func (inst *Instance) GetParam(name string) (any, bool) {
 	return inst.model.GetParam(name)
 }
 
+// Solve runs the solver and returns the last solution along with the final
+// status and statistics.
 func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, error) {
 	options := &SolveOptions{}
 	for _, opt := range opts {
 		opt(options)
 	}
 
-	args, err := inst.buildArgs(options)
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	args, err := inst.buildArgsLocked(options)
 	if err != nil {
 		return nil, err
 	}
-	defer inst.Cleanup()
+	defer inst.cleanupLocked()
 
 	messages, err := inst.driver.runJSON(ctx, args)
 	if err != nil {
@@ -82,23 +100,24 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	}
 
 	var lastResult *Result
-	var finalStatus Status = StatusUnknown
+	var finalStatus = StatusUnknown
 	var finalStats Statistics
 	var hasStats bool
 
 	for _, msg := range messages {
-		if msg.Type == "solution" {
+		switch msg.Type {
+		case "solution":
 			result, err := parseStreamMessage(msg)
 			if err != nil {
 				return nil, err
 			}
 			lastResult = result
-		} else if msg.Type == "statistics" {
+		case "statistics":
 			if stats, ok := parseStatisticsFromMessage(msg); ok {
 				finalStats = stats
 				hasStats = true
 			}
-		} else if msg.Type == "status" {
+		case "status":
 			finalStatus = msg.Status
 		}
 	}
@@ -106,7 +125,7 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	if lastResult == nil {
 		result := &Result{
 			Status:   finalStatus,
-			Solution: make(map[string]interface{}),
+			Solution: make(map[string]any),
 		}
 		if hasStats {
 			result.Statistics = finalStats
@@ -121,6 +140,7 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	return lastResult, nil
 }
 
+// SolveAll returns every solution the solver reports.
 func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Result, error) {
 	options := &SolveOptions{}
 	for _, opt := range opts {
@@ -131,11 +151,14 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 		options.AllSolutions = true
 	}
 
-	args, err := inst.buildArgs(options)
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	args, err := inst.buildArgsLocked(options)
 	if err != nil {
 		return nil, err
 	}
-	defer inst.Cleanup()
+	defer inst.cleanupLocked()
 
 	messages, err := inst.driver.runJSON(ctx, args)
 	if err != nil {
@@ -143,23 +166,24 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	}
 
 	var results []*Result
-	var finalStatus Status = StatusUnknown
+	var finalStatus = StatusUnknown
 	var finalStats Statistics
 	var hasStats bool
 
 	for _, msg := range messages {
-		if msg.Type == "solution" {
+		switch msg.Type {
+		case "solution":
 			result, err := parseStreamMessage(msg)
 			if err != nil {
 				return nil, err
 			}
 			results = append(results, result)
-		} else if msg.Type == "statistics" {
+		case "statistics":
 			if stats, ok := parseStatisticsFromMessage(msg); ok {
 				finalStats = stats
 				hasStats = true
 			}
-		} else if msg.Type == "status" {
+		case "status":
 			finalStatus = msg.Status
 		}
 	}
@@ -174,6 +198,8 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	return results, nil
 }
 
+// SolveStream emits solutions on the returned channel as they are produced. The
+// channel is closed when the solver finishes or ctx is canceled.
 func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-chan *Result {
 	ch := make(chan *Result)
 
@@ -189,27 +215,30 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			options.AllSolutions = true
 		}
 
-		args, err := inst.buildArgs(options)
+		inst.mu.Lock()
+		defer inst.mu.Unlock()
+
+		args, err := inst.buildArgsLocked(options)
 		if err != nil {
-			ch <- &Result{
-				Status: StatusError,
-				Error:  err,
+			select {
+			case ch <- &Result{Status: StatusError, Error: err}:
+			case <-ctx.Done():
 			}
 			return
 		}
-		defer inst.Cleanup()
+		defer inst.cleanupLocked()
 
-		var finalStatus Status = StatusUnknown
+		var finalStatus = StatusUnknown
 		var latestStats Statistics
 		var hasStats bool
 
 		err = inst.driver.runJSONStream(ctx, args, func(msg streamMessage) error {
-			if stats, ok := parseStatisticsFromMessage(msg); ok {
-				latestStats = stats
-				hasStats = true
-			}
-
 			switch msg.Type {
+			case "statistics":
+				if stats, ok := parseStatisticsFromMessage(msg); ok {
+					latestStats = stats
+					hasStats = true
+				}
 			case "solution":
 				result, err := parseStreamMessage(msg)
 				if err != nil {
@@ -237,9 +266,9 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			if ctx.Err() != nil {
 				return
 			}
-			ch <- &Result{
-				Status: StatusError,
-				Error:  err,
+			select {
+			case ch <- &Result{Status: StatusError, Error: err}:
+			case <-ctx.Done():
 			}
 		}
 	}()
@@ -247,23 +276,36 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 	return ch
 }
 
+// Cleanup removes the temporary model file written by the last solve, if any.
+// Solve, SolveAll and SolveStream call Cleanup automatically; this is exposed
+// for callers that abort before a solve completes.
 func (inst *Instance) Cleanup() error {
-	if inst.tempFile != "" {
-		err := os.Remove(inst.tempFile)
-		inst.tempFile = ""
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	return inst.cleanupLocked()
+}
+
+func (inst *Instance) cleanupLocked() error {
+	path := inst.tempFile
+	inst.tempFile = ""
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	return nil
 }
 
-func (inst *Instance) buildArgs(options *SolveOptions) ([]string, error) {
+func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, error) {
 	tmpModel, err := os.CreateTemp("", "minizinc-*.mzn")
 	if err != nil {
 		return nil, wrapError("failed to create temp file", err)
 	}
-	defer tmpModel.Close()
+	tmpName := tmpModel.Name()
 	cleanupTemp := func() {
-		_ = os.Remove(tmpModel.Name())
+		_ = tmpModel.Close()
+		_ = os.Remove(tmpName)
 	}
 
 	code := inst.model.getCode()
@@ -271,13 +313,16 @@ func (inst *Instance) buildArgs(options *SolveOptions) ([]string, error) {
 		cleanupTemp()
 		return nil, wrapError("failed to write model", err)
 	}
+	if err := tmpModel.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return nil, wrapError("failed to close temp file", err)
+	}
 
-	inst.tempFile = tmpModel.Name()
 	args := []string{"--solver", inst.solver.ID}
 
 	dataJSON, err := inst.model.getDataJSON()
 	if err != nil {
-		cleanupTemp()
+		_ = os.Remove(tmpName)
 		return nil, err
 	}
 
@@ -306,7 +351,7 @@ func (inst *Instance) buildArgs(options *SolveOptions) ([]string, error) {
 		args = append(args, "-p", strconv.Itoa(options.Processes))
 	}
 
-	if options.RandomSeed > 0 {
+	if options.HasRandomSeed {
 		args = append(args, "-r", strconv.Itoa(options.RandomSeed))
 	}
 
@@ -327,7 +372,8 @@ func (inst *Instance) buildArgs(options *SolveOptions) ([]string, error) {
 	}
 
 	args = append(args, options.ExtraArgs...)
-	args = append(args, tmpModel.Name())
+	args = append(args, tmpName)
 
+	inst.tempFile = tmpName
 	return args, nil
 }

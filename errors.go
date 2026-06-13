@@ -2,6 +2,9 @@ package minizinc
 
 import "fmt"
 
+// Error is the package's error type. It always carries a human-readable
+// message and may wrap an underlying cause that is exposed via Unwrap so that
+// errors.Is and errors.As work as expected.
 type Error struct {
 	Message string
 	Cause   error
@@ -26,17 +29,12 @@ func wrapError(msg string, err error) *Error {
 	return &Error{Message: msg, Cause: err}
 }
 
+// Sentinel errors returned by the package.
 var (
 	ErrDriverNotFound     = newError("minizinc executable not found in PATH")
 	ErrInvalidVersion     = newError("minizinc version is too old, need 2.6.0 or higher")
 	ErrSolverNotFound     = newError("solver not found")
-	ErrInvalidModel       = newError("invalid model")
 	ErrNilModel           = newError("model is nil")
 	ErrNoSolver           = newError("no solver available")
-	ErrNoSolution         = newError("no solution found")
-	ErrExecutionFailed    = newError("minizinc execution failed")
-	ErrInvalidJSON        = newError("invalid JSON response from minizinc")
-	ErrParameterNotSet    = newError("required parameter not set")
-	ErrInvalidParameter   = newError("invalid parameter value")
 	ErrMultipleAssignment = newError("parameter already assigned")
 )
