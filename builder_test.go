@@ -196,9 +196,14 @@ func TestRunConfigFor_DefaultsGrace(t *testing.T) {
 	if cfg.grace != defaultCancelGrace {
 		t.Errorf("expected default grace, got %v", cfg.grace)
 	}
-	cfg = runConfigFor(&SolveOptions{CancelGrace: 500 * time.Millisecond})
+	cfg = runConfigFor(&SolveOptions{CancelGrace: 500 * time.Millisecond, HasCancelGrace: true})
 	if cfg.grace != 500*time.Millisecond {
 		t.Errorf("expected user grace, got %v", cfg.grace)
+	}
+	// WithCancelGrace(0) must disable, not fall back to default
+	cfg = runConfigFor(&SolveOptions{HasCancelGrace: true})
+	if cfg.grace != 0 {
+		t.Errorf("expected disabled (0), got %v", cfg.grace)
 	}
 }
 
@@ -405,6 +410,47 @@ func TestMissingParamsError_Message(t *testing.T) {
 	e := &MissingParamsError{Missing: []string{"n", "k"}}
 	if !strings.Contains(e.Error(), "n, k") {
 		t.Errorf("bad message: %s", e.Error())
+	}
+}
+
+func TestAnalyzeModel_GlobalRequiresFunctionCall(t *testing.T) {
+	// Identifier containing the keyword must not trigger a global match.
+	m := NewModel()
+	m.AddString(`
+		var 1..10: alldifferent_count;
+		constraint alldifferent_count > 0;
+		solve satisfy;
+	`)
+	a := analyzeModel(m)
+	if a.HasGlobalConstraints {
+		t.Errorf("identifier with substring should not trigger globals: %+v", a.GlobalConstraintsUsed)
+	}
+
+	// Real call must still trigger.
+	m2 := NewModel()
+	m2.AddString(`
+		array[1..3] of var 1..3: q;
+		constraint alldifferent(q);
+		solve satisfy;
+	`)
+	a2 := analyzeModel(m2)
+	if !a2.HasGlobalConstraints {
+		t.Error("real alldifferent(q) call should trigger")
+	}
+}
+
+func TestWithCancelGrace_ZeroDisables(t *testing.T) {
+	o := &SolveOptions{}
+	WithCancelGrace(0)(o)
+	if !o.HasCancelGrace {
+		t.Fatal("HasCancelGrace must be true after explicit WithCancelGrace(0)")
+	}
+	if o.CancelGrace != 0 {
+		t.Fatalf("grace = %v, want 0", o.CancelGrace)
+	}
+	cfg := runConfigFor(o)
+	if cfg.grace != 0 {
+		t.Errorf("expected grace 0 (disabled), got %v", cfg.grace)
 	}
 }
 
