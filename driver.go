@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -103,6 +102,8 @@ func NewDriver(path string) (*Driver, error) {
 	return d, nil
 }
 
+var versionRegexp = regexp.MustCompile(`version (\d+)\.(\d+)\.(\d+)`)
+
 func (d *Driver) detectVersion() error {
 	cmd := exec.Command(d.executable, "--version")
 	var stdout, stderr bytes.Buffer
@@ -113,8 +114,7 @@ func (d *Driver) detectVersion() error {
 	}
 	out := stdout.Bytes()
 
-	re := regexp.MustCompile(`version (\d+)\.(\d+)\.(\d+)`)
-	matches := re.FindStringSubmatch(string(out))
+	matches := versionRegexp.FindStringSubmatch(string(out))
 	if len(matches) != 4 {
 		return newError("failed to parse version string")
 	}
@@ -166,13 +166,7 @@ type runConfig struct {
 func (d *Driver) newCmd(ctx context.Context, args []string, cfg runConfig) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, d.executable, args...)
 	if cfg.grace > 0 {
-		cmd.Cancel = func() error {
-			if cmd.Process != nil {
-				return cmd.Process.Signal(syscall.SIGTERM)
-			}
-			return nil
-		}
-		cmd.WaitDelay = cfg.grace
+		installCooperativeCancel(cmd, cfg.grace)
 	}
 	if cfg.stdin != nil {
 		cmd.Stdin = bytes.NewReader(cfg.stdin)
