@@ -284,6 +284,138 @@ func TestClassifyStderr(t *testing.T) {
 	}
 }
 
+func TestBuilder_Comprehension(t *testing.T) {
+	i := Var("i")
+	got := Comprehension(i.Mul(Int(2)), In(i, Range(Int(1), Int(5))))
+	want := "[(i * 2) | i in 1..5]"
+	if got.code != want {
+		t.Errorf("got %q, want %q", got.code, want)
+	}
+}
+
+func TestBuilder_ForallGWhere(t *testing.T) {
+	i, j := Var("i"), Var("j")
+	body := i.Lt(j)
+	got := ForallG(body,
+		In(i, Range(Int(1), Int(5))),
+		InWhere(j, Range(Int(1), Int(5)), i.Lt(j)))
+	want := "forall(i in 1..5, j in 1..5 where (i < j))((i < j))"
+	if got.code != want {
+		t.Errorf("got %q, want %q", got.code, want)
+	}
+}
+
+func TestBuilder_ConjAndDisj(t *testing.T) {
+	a, b, c := Var("a"), Var("b"), Var("c")
+	conj := ConjOf(a, b, c)
+	if conj.code != `(a /\ b /\ c)` {
+		t.Errorf("conj: %q", conj.code)
+	}
+	disj := DisjOf(a, b)
+	if disj.code != `(a \/ b)` {
+		t.Errorf("disj: %q", disj.code)
+	}
+	if ConjOf().code != "true" {
+		t.Error("empty ConjOf should be true")
+	}
+	if DisjOf().code != "false" {
+		t.Error("empty DisjOf should be false")
+	}
+	if ConjOf(a).code != "a" {
+		t.Error("single ConjOf should unwrap")
+	}
+}
+
+func TestBuilder_MoreSearchAnnotations(t *testing.T) {
+	xs := Var("xs")
+	cases := []struct {
+		got  Annotation
+		want string
+	}{
+		{BoolSearch(xs, "input_order", "indomain_min", ""), "bool_search(xs, input_order, indomain_min, complete)"},
+		{SetSearch(xs, "input_order", "indomain_min", ""), "set_search(xs, input_order, indomain_min, complete)"},
+		{FloatSearch(xs, 0.001, "input_order", "indomain_min", ""), "float_search(xs, 0.001, input_order, indomain_min, complete)"},
+	}
+	for _, tc := range cases {
+		if tc.got.code != tc.want {
+			t.Errorf("got %q, want %q", tc.got.code, tc.want)
+		}
+	}
+}
+
+func TestResult_Sections(t *testing.T) {
+	msg := streamMessage{
+		Type: "solution",
+		Output: map[string]any{
+			"dzn":      "x = 1;",
+			"explain":  "x picked because of constraint c1",
+			"checker":  "OK",
+			"badField": 42, // non-string ignored
+		},
+	}
+	r, err := parseStreamMessage(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := r.Section("explain"); !ok || !strings.Contains(v, "constraint") {
+		t.Errorf("explain section missing or wrong: %q", v)
+	}
+	if _, ok := r.Section("dzn"); ok {
+		t.Error("dzn should not be exposed as a section")
+	}
+	if _, ok := r.Section("badField"); ok {
+		t.Error("non-string field should be skipped")
+	}
+}
+
+func TestBuilder_RequiredParamsExposedOnModel(t *testing.T) {
+	b := NewBuilder()
+	b.IntParam("n")
+	b.IntParam("k")
+	b.IntVar("x", 1, 10) // not a param
+	b.Satisfy()
+	m := b.Build()
+
+	got := m.MissingParams()
+	if !sliceEq(got, []string{"n", "k"}) {
+		t.Errorf("missing should list both params, got %v", got)
+	}
+}
+
+func TestBuilder_MissingParamsClearedAsSet(t *testing.T) {
+	b := NewBuilder()
+	b.IntParam("n")
+	b.IntParam("k")
+	b.Satisfy()
+	m := b.Build()
+	if err := m.SetParam("n", 8); err != nil {
+		t.Fatal(err)
+	}
+	missing := m.MissingParams()
+	if !sliceEq(missing, []string{"k"}) {
+		t.Errorf("got %v, want [k]", missing)
+	}
+	_ = m.SetParam("k", 3)
+	if got := m.MissingParams(); len(got) != 0 {
+		t.Errorf("expected none, got %v", got)
+	}
+}
+
+func TestMissingParamsError_Message(t *testing.T) {
+	e := &MissingParamsError{Missing: []string{"n", "k"}}
+	if !strings.Contains(e.Error(), "n, k") {
+		t.Errorf("bad message: %s", e.Error())
+	}
+}
+
+func TestWithModelViaStdin_SetsFlag(t *testing.T) {
+	o := &SolveOptions{}
+	WithModelViaStdin()(o)
+	if !o.ModelViaStdin {
+		t.Fatal("flag not set")
+	}
+}
+
 func TestMinizincError_Is_BranchesByCategory(t *testing.T) {
 	cases := []struct {
 		cat    ErrorCategory
