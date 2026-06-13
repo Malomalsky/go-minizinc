@@ -11,11 +11,18 @@ import (
 // Result is one solver outcome — solution variables, terminal status, and
 // (when available) statistics. Error is populated only by SolveStream when
 // the streaming pipeline produces an error.
+//
+// IsIntermediate is set only by SolveStream. It is true for every solution
+// emitted before the terminal status message arrives (improving solutions
+// during optimization) and false for the last result, which carries the
+// terminal Status. Consumers that only care about the final answer can
+// filter on !IsIntermediate.
 type Result struct {
-	Status     Status
-	Solution   map[string]any
-	Statistics Statistics
-	Error      error
+	Status         Status
+	Solution       map[string]any
+	Statistics     Statistics
+	Error          error
+	IsIntermediate bool
 }
 
 func (r *Result) Get(name string) (any, bool) {
