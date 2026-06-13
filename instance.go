@@ -94,13 +94,19 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
-	args, err := inst.buildArgsLocked(options)
+	if err := inst.checkRequiredParamsLocked(); err != nil {
+		return nil, err
+	}
+
+	args, stdin, err := inst.buildArgsLocked(options)
 	if err != nil {
 		return nil, err
 	}
 	defer inst.cleanupLocked()
 
-	messages, err := inst.driver.runJSON(ctx, args, runConfigFor(options))
+	cfg := runConfigFor(options)
+	cfg.stdin = stdin
+	messages, err := inst.driver.runJSON(ctx, args, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -160,13 +166,19 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
-	args, err := inst.buildArgsLocked(options)
+	if err := inst.checkRequiredParamsLocked(); err != nil {
+		return nil, err
+	}
+
+	args, stdin, err := inst.buildArgsLocked(options)
 	if err != nil {
 		return nil, err
 	}
 	defer inst.cleanupLocked()
 
-	messages, err := inst.driver.runJSON(ctx, args, runConfigFor(options))
+	cfg := runConfigFor(options)
+	cfg.stdin = stdin
+	messages, err := inst.driver.runJSON(ctx, args, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +238,15 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 		inst.mu.Lock()
 		defer inst.mu.Unlock()
 
-		args, err := inst.buildArgsLocked(options)
+		if err := inst.checkRequiredParamsLocked(); err != nil {
+			select {
+			case ch <- &Result{Status: StatusError, Error: err}:
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		args, stdin, err := inst.buildArgsLocked(options)
 		if err != nil {
 			select {
 			case ch <- &Result{Status: StatusError, Error: err}:
@@ -235,6 +255,9 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			return
 		}
 		defer inst.cleanupLocked()
+
+		cfg := runConfigFor(options)
+		cfg.stdin = stdin
 
 		var finalStatus = StatusUnknown
 		var latestStats Statistics
@@ -259,7 +282,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			}
 		}
 
-		err = inst.driver.runJSONStream(ctx, args, runConfigFor(options), func(msg streamMessage) error {
+		err = inst.driver.runJSONStream(ctx, args, cfg, func(msg streamMessage) error {
 			switch msg.Type {
 			case "statistics":
 				if stats, ok := parseStatisticsFromMessage(msg); ok {
@@ -343,41 +366,21 @@ func (inst *Instance) cleanupLocked() error {
 	return firstErr
 }
 
-func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, error) {
-	tmpModel, err := os.CreateTemp("", "minizinc-*.mzn")
-	if err != nil {
-		return nil, wrapError("failed to create temp file", err)
-	}
-	tmpName := tmpModel.Name()
-	cleanupTemp := func() {
-		_ = tmpModel.Close()
-		_ = os.Remove(tmpName)
-	}
-
+func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, error) {
 	code := inst.model.getCode()
-	if _, err := tmpModel.WriteString(code); err != nil {
-		cleanupTemp()
-		return nil, wrapError("failed to write model", err)
-	}
-	if err := tmpModel.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return nil, wrapError("failed to close temp file", err)
-	}
 
 	args := []string{"--solver", inst.solver.ID}
 
 	dataJSON, err := inst.model.getDataJSON()
 	if err != nil {
-		_ = os.Remove(tmpName)
-		return nil, err
+		return nil, nil, err
 	}
 
 	if dataJSON != "" {
 		if len(dataJSON) > cmdlineJSONLimit {
 			dataPath, err := writeTempJSON(dataJSON)
 			if err != nil {
-				_ = os.Remove(tmpName)
-				return nil, err
+				return nil, nil, err
 			}
 			inst.tempFiles = append(inst.tempFiles, dataPath)
 			args = append(args, "-d", dataPath)
@@ -428,14 +431,50 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, error) {
 	}
 
 	args = append(args, options.ExtraArgs...)
-	args = append(args, tmpName)
 
-	inst.tempFile = tmpName
+	var stdin []byte
+	if options.ModelViaStdin {
+		args = append(args, "--input-from-stdin")
+		stdin = []byte(code)
+	} else {
+		tmpName, err := writeTempModel(code)
+		if err != nil {
+			return nil, nil, err
+		}
+		args = append(args, tmpName)
+		inst.tempFile = tmpName
+	}
 
 	if options.CommandHook != nil {
 		options.CommandHook(append([]string(nil), args...))
 	}
-	return args, nil
+	return args, stdin, nil
+}
+
+func (inst *Instance) checkRequiredParamsLocked() error {
+	missing := inst.model.MissingParams()
+	if len(missing) > 0 {
+		return &MissingParamsError{Missing: missing}
+	}
+	return nil
+}
+
+func writeTempModel(code string) (string, error) {
+	f, err := os.CreateTemp("", "minizinc-*.mzn")
+	if err != nil {
+		return "", wrapError("failed to create temp file", err)
+	}
+	name := f.Name()
+	if _, err := f.WriteString(code); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return "", wrapError("failed to write model", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", wrapError("failed to close temp file", err)
+	}
+	return name, nil
 }
 
 func runConfigFor(options *SolveOptions) runConfig {
