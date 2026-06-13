@@ -16,11 +16,12 @@ import (
 // The builder is NOT safe for concurrent use; build the model from a single
 // goroutine, then hand the resulting *Model to as many Instances as needed.
 type Builder struct {
-	decls       []string
-	constraints []Expr
-	solve       string
-	includes    map[string]struct{}
-	names       map[string]string // name -> kind, for collision detection
+	decls          []string
+	constraints    []Expr
+	solve          string
+	includes       map[string]struct{}
+	names          map[string]string // name -> kind, for collision detection
+	requiredParams []string          // params that must be SetParam'd before solve
 }
 
 // NewBuilder returns an empty Builder.
@@ -75,6 +76,7 @@ func (b *Builder) BoolVar(name string) Expr {
 func (b *Builder) IntParam(name string) Expr {
 	b.registerName(name, "int param")
 	b.decls = append(b.decls, fmt.Sprintf("int: %s;", name))
+	b.requiredParams = append(b.requiredParams, name)
 	return ref(name)
 }
 
@@ -82,6 +84,7 @@ func (b *Builder) IntParam(name string) Expr {
 func (b *Builder) FloatParam(name string) Expr {
 	b.registerName(name, "float param")
 	b.decls = append(b.decls, fmt.Sprintf("float: %s;", name))
+	b.requiredParams = append(b.requiredParams, name)
 	return ref(name)
 }
 
@@ -89,6 +92,7 @@ func (b *Builder) FloatParam(name string) Expr {
 func (b *Builder) BoolParam(name string) Expr {
 	b.registerName(name, "bool param")
 	b.decls = append(b.decls, fmt.Sprintf("bool: %s;", name))
+	b.requiredParams = append(b.requiredParams, name)
 	return ref(name)
 }
 
@@ -105,6 +109,7 @@ func (b *Builder) IntArray(name string, size, lo, hi int) Expr {
 func (b *Builder) IntArrayParamSized(name string, sizeParam Expr) Expr {
 	b.registerName(name, "int array param")
 	b.decls = append(b.decls, fmt.Sprintf("array[1..%s] of int: %s;", sizeParam.code, name))
+	b.requiredParams = append(b.requiredParams, name)
 	return ref(name)
 }
 
@@ -146,6 +151,7 @@ func (b *Builder) IntSetVar(name string, lo, hi int) Expr {
 func (b *Builder) IntSetParam(name string) Expr {
 	b.registerName(name, "set param")
 	b.decls = append(b.decls, fmt.Sprintf("set of int: %s;", name))
+	b.requiredParams = append(b.requiredParams, name)
 	return ref(name)
 }
 
@@ -194,11 +200,36 @@ func annotateGoal(goal string, anns []Annotation) string {
 // valChoice: "indomain_min", "indomain_max", "indomain_random" …
 // Pass "complete" or "" for the strategy; "" omits it.
 func IntSearch(vars Expr, varSelect, valChoice, strategy string) Annotation {
+	return searchAnnotation("int_search", vars, varSelect, valChoice, strategy)
+}
+
+// BoolSearch is the boolean analogue of IntSearch.
+func BoolSearch(vars Expr, varSelect, valChoice, strategy string) Annotation {
+	return searchAnnotation("bool_search", vars, varSelect, valChoice, strategy)
+}
+
+// SetSearch is the set-of-int analogue.
+func SetSearch(vars Expr, varSelect, valChoice, strategy string) Annotation {
+	return searchAnnotation("set_search", vars, varSelect, valChoice, strategy)
+}
+
+// FloatSearch takes an additional precision argument required by MiniZinc.
+func FloatSearch(vars Expr, prec float64, varSelect, valChoice, strategy string) Annotation {
 	if strategy == "" {
 		strategy = "complete"
 	}
 	return Annotation{
-		code: fmt.Sprintf("int_search(%s, %s, %s, %s)", vars.code, varSelect, valChoice, strategy),
+		code: fmt.Sprintf("float_search(%s, %s, %s, %s, %s)",
+			vars.code, formatFloat(prec), varSelect, valChoice, strategy),
+	}
+}
+
+func searchAnnotation(name string, vars Expr, varSelect, valChoice, strategy string) Annotation {
+	if strategy == "" {
+		strategy = "complete"
+	}
+	return Annotation{
+		code: fmt.Sprintf("%s(%s, %s, %s, %s)", name, vars.code, varSelect, valChoice, strategy),
 	}
 }
 
@@ -252,6 +283,7 @@ func (b *Builder) Build() *Model {
 
 	m := NewModel()
 	m.AddString(sb.String())
+	m.requiredParams = append([]string(nil), b.requiredParams...)
 	return m
 }
 
@@ -332,8 +364,32 @@ func Sum(es ...Expr) Expr {
 	return Expr{code: fmt.Sprintf("sum([%s])", strings.Join(exprCodes(es), ", "))}
 }
 
-// Forall returns `forall(idx in domain)(body)` where idx is a fresh
-// identifier and domain a range.
+// Generator is a `i in domain` (optionally `where cond`) clause used in
+// comprehensions and Forall/Exists. Build with In or InWhere.
+type Generator struct {
+	code string
+}
+
+// In constructs `idx in domain`.
+func In(idx, domain Expr) Generator {
+	return Generator{code: fmt.Sprintf("%s in %s", idx.code, domain.code)}
+}
+
+// InWhere constructs `idx in domain where cond`.
+func InWhere(idx, domain, cond Expr) Generator {
+	return Generator{code: fmt.Sprintf("%s in %s where %s", idx.code, domain.code, cond.code)}
+}
+
+func generatorList(gens []Generator) string {
+	parts := make([]string, len(gens))
+	for i, g := range gens {
+		parts[i] = g.code
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Forall returns `forall(idx in domain)(body)`. For multiple generators or
+// where-clauses, use ForallG.
 func Forall(idx, domain, body Expr) Expr {
 	return Expr{code: fmt.Sprintf("forall(%s in %s)(%s)", idx.code, domain.code, body.code)}
 }
@@ -341,6 +397,52 @@ func Forall(idx, domain, body Expr) Expr {
 // Exists returns `exists(idx in domain)(body)`.
 func Exists(idx, domain, body Expr) Expr {
 	return Expr{code: fmt.Sprintf("exists(%s in %s)(%s)", idx.code, domain.code, body.code)}
+}
+
+// ForallG is the general form of Forall: any number of generators, each of
+// which may include a where clause.
+func ForallG(body Expr, gens ...Generator) Expr {
+	return Expr{code: fmt.Sprintf("forall(%s)(%s)", generatorList(gens), body.code)}
+}
+
+// ExistsG is the general form of Exists.
+func ExistsG(body Expr, gens ...Generator) Expr {
+	return Expr{code: fmt.Sprintf("exists(%s)(%s)", generatorList(gens), body.code)}
+}
+
+// Comprehension constructs an array comprehension `[body | gens...]`.
+//
+//	Comprehension(i.Mul(Int(2)), In(Var("i"), Range(Int(1), Int(n))))  // [i*2 | i in 1..n]
+func Comprehension(body Expr, gens ...Generator) Expr {
+	return Expr{code: fmt.Sprintf("[%s | %s]", body.code, generatorList(gens))}
+}
+
+// SetComprehension is the set-valued variant: `{body | gens...}`.
+func SetComprehension(body Expr, gens ...Generator) Expr {
+	return Expr{code: fmt.Sprintf("{%s | %s}", body.code, generatorList(gens))}
+}
+
+// And concatenates expressions with /\, useful for forall-bodies of
+// multiple constraints: `forall(i in 1..n)(c1 /\ c2 /\ c3)`.
+func ConjOf(es ...Expr) Expr {
+	if len(es) == 0 {
+		return Expr{code: "true"}
+	}
+	if len(es) == 1 {
+		return es[0]
+	}
+	return Expr{code: "(" + strings.Join(exprCodes(es), ` /\ `) + ")"}
+}
+
+// DisjOf is the disjunction analogue of ConjOf.
+func DisjOf(es ...Expr) Expr {
+	if len(es) == 0 {
+		return Expr{code: "false"}
+	}
+	if len(es) == 1 {
+		return es[0]
+	}
+	return Expr{code: "(" + strings.Join(exprCodes(es), ` \/ `) + ")"}
 }
 
 // AllDifferent emits the global constraint. Accepts either an array variable
