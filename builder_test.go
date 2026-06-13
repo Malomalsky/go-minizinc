@@ -413,6 +413,46 @@ func TestMissingParamsError_Message(t *testing.T) {
 	}
 }
 
+func TestCollectStreamErrors(t *testing.T) {
+	msgs := []streamMessage{
+		{Type: "solution", Solution: map[string]any{"x": 1}},
+		{Type: "error", What: "syntax error", Message: "unexpected token"},
+		{Type: "error", What: "type error", Message: "x has wrong type"},
+	}
+	got := collectStreamErrors(msgs)
+	if !strings.Contains(got, "syntax error: unexpected token") {
+		t.Errorf("missing syntax error: %q", got)
+	}
+	if !strings.Contains(got, "type error: x has wrong type") {
+		t.Errorf("missing type error: %q", got)
+	}
+}
+
+func TestCombineErrorText(t *testing.T) {
+	streamErr := []streamMessage{{Type: "error", What: "syntax error", Message: "x"}}
+	if got := combineErrorText(nil, ""); got != "" {
+		t.Errorf("both empty -> %q", got)
+	}
+	if got := combineErrorText(streamErr, ""); got != "syntax error: x" {
+		t.Errorf("stream only -> %q", got)
+	}
+	if got := combineErrorText(nil, "stderr text"); got != "stderr text" {
+		t.Errorf("stderr only -> %q", got)
+	}
+	if got := combineErrorText(streamErr, "stderr text"); got != "syntax error: x\nstderr text" {
+		t.Errorf("both -> %q", got)
+	}
+}
+
+func TestClassifyStderr_FromStreamMessage(t *testing.T) {
+	// The driver routes type=="error" payload into Stderr via combineErrorText
+	// before classify runs, so the heuristic still catches it.
+	cat := classifyStderr("syntax error: unexpected token")
+	if cat != CategorySyntax {
+		t.Errorf("expected Syntax, got %v", cat)
+	}
+}
+
 func TestAnalyzeModel_GlobalRequiresFunctionCall(t *testing.T) {
 	// Identifier containing the keyword must not trigger a global match.
 	m := NewModel()
