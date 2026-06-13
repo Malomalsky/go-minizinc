@@ -1,3 +1,7 @@
+// Streaming example. NOTE: COIN-BC is a MIP solver and does not enumerate
+// all solutions for satisfaction problems — for `solve satisfy` it returns
+// only the first solution and prints a warning to stderr. To see every
+// solution use a CP solver such as Gecode or Chuffed via FindSolver.
 package main
 
 import (
