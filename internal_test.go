@@ -1,12 +1,16 @@
 package minizinc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestModelCopy_TypedSlice(t *testing.T) {
@@ -71,9 +75,73 @@ func TestModelCopy_NilParameter(t *testing.T) {
 	}
 }
 
+func TestModelParameterIsolation(t *testing.T) {
+	type payload struct {
+		Values []int
+	}
+	original := payload{Values: []int{1, 2, 3}}
+	model := NewModel()
+	if err := model.SetParam("p", original); err != nil {
+		t.Fatal(err)
+	}
+	original.Values[0] = 9
+	got, _ := model.GetParam("p")
+	if got.(payload).Values[0] != 1 {
+		t.Fatalf("stored value changed: %v", got)
+	}
+	copy := got.(payload)
+	copy.Values[1] = 9
+	again, _ := model.GetParam("p")
+	if again.(payload).Values[1] != 2 {
+		t.Fatalf("returned value aliases model: %v", again)
+	}
+}
+
+func TestModelRejectsCyclicParameter(t *testing.T) {
+	value := map[string]any{}
+	value["self"] = value
+	if err := NewModel().SetParam("value", value); err == nil {
+		t.Fatal("expected cyclic value error")
+	}
+}
+
+func TestModelAddFileTracksPaths(t *testing.T) {
+	dir := t.TempDir()
+	modelPath := filepath.Join(dir, "model.MZN")
+	dataPath := filepath.Join(dir, "data.JSON")
+	if err := os.WriteFile(modelPath, []byte("solve satisfy;"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dataPath, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model := NewModel()
+	if err := model.AddFile(modelPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.AddFile(dataPath); err != nil {
+		t.Fatal(err)
+	}
+	if !sliceEq(model.includeDirs, []string{dir}) {
+		t.Fatalf("include dirs: %v", model.includeDirs)
+	}
+	if !sliceEq(model.dataFiles, []string{dataPath}) {
+		t.Fatalf("data files: %v", model.dataFiles)
+	}
+}
+
 func TestNewInstance_NilModel(t *testing.T) {
 	if _, err := NewInstance(nil, nil); !errors.Is(err, ErrNilModel) {
 		t.Fatalf("expected ErrNilModel, got %v", err)
+	}
+}
+
+func TestNilDriverErrors(t *testing.T) {
+	if _, err := FindSolverWithDriver("gecode", nil); !errors.Is(err, ErrNilDriver) {
+		t.Fatalf("FindSolverWithDriver: %v", err)
+	}
+	if _, err := FindBestSolverWithDriver(SolverFilter{}, nil); !errors.Is(err, ErrNilDriver) {
+		t.Fatalf("FindBestSolverWithDriver: %v", err)
 	}
 }
 
@@ -301,7 +369,7 @@ func TestWriteTempJSON_Roundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(p)
+	defer func() { _ = os.Remove(p) }()
 	data, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
@@ -311,11 +379,193 @@ func TestWriteTempJSON_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestParseJSONStreamLargeMessage(t *testing.T) {
+	large := strings.Repeat("x", 11*1024*1024)
+	data, err := json.Marshal(streamMessage{
+		Type:   "solution",
+		Output: map[string]any{"default": large},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := parseJSONStream(strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Output["default"] != large {
+		t.Fatal("large JSON message was not preserved")
+	}
+}
+
+func TestRunJSONReturnsContextError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	driver := &Driver{executable: "/bin/sh"}
+	_, err := driver.runJSON(ctx, []string{"-c", "sleep 5"}, runConfig{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestSolverCacheReturnsCopies(t *testing.T) {
+	driver := &Driver{
+		solversLoaded: true,
+		solvers: []Solver{
+			{
+				ID:         "solver",
+				Tags:       []string{"cp"},
+				StdFlags:   []string{"-a"},
+				ExtraFlags: []any{map[string]any{"name": "flag"}},
+			},
+			{ID: "without-extra-flags"},
+		},
+	}
+	first, err := driver.listSolvers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first[0].ID = "changed"
+	first[0].Tags[0] = "changed"
+	first[0].ExtraFlags[0].(map[string]any)["name"] = "changed"
+	second, err := driver.listSolvers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second[0].ID != "solver" || second[0].Tags[0] != "cp" ||
+		second[0].ExtraFlags[0].(map[string]any)["name"] != "flag" {
+		t.Fatalf("cache mutated through caller: %+v", second[0])
+	}
+	if second[1].ExtraFlags != nil {
+		t.Fatalf("got extra flags: %+v", second[1].ExtraFlags)
+	}
+}
+
+func TestDriverVersionReturnsCopy(t *testing.T) {
+	driver := &Driver{version: &Version{Major: 2, Minor: 6}}
+	version := driver.Version()
+	version.Major = 9
+	if driver.Version().Major != 2 {
+		t.Fatal("driver version mutated through caller")
+	}
+}
+
+func TestFindSolverForModelWithCustomDriver(t *testing.T) {
+	driver := &Driver{
+		solversLoaded: true,
+		solvers: []Solver{{
+			ID:   "mip",
+			Tags: []string{"mip", "int"},
+		}},
+	}
+	model := NewModel()
+	model.AddString("array[1..2] of var 1..2: x; constraint alldifferent(x); solve satisfy;")
+	solver, err := FindSolverForModelWithDriver(model, driver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if solver.ID != "mip" {
+		t.Fatalf("got %q", solver.ID)
+	}
+}
+
+func TestBuildArgsDefaultsToJSON(t *testing.T) {
+	model := NewModel()
+	model.AddString("solve satisfy;")
+	if err := model.SetParam("x", 1); err != nil {
+		t.Fatal(err)
+	}
+	inst := &Instance{model: model, solver: &Solver{ID: "test"}}
+	args, _, err := inst.buildArgsLocked(&SolveOptions{
+		OptimizationLevel:    0,
+		HasOptimizationLevel: true,
+		TimeLimit:            time.Microsecond,
+	})
+	defer func() { _ = inst.cleanupLocked() }()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--output-mode json", "--output-output-item", "-O0", "-d", "--time-limit 1"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in %q", want, joined)
+		}
+	}
+	if strings.Contains(joined, "--cmdline-json-data") {
+		t.Fatalf("parameters leaked into argv: %q", joined)
+	}
+}
+
+func TestValidateSolveOptions(t *testing.T) {
+	cases := []*SolveOptions{
+		{OutputMode: "xml"},
+		{NumSolutions: -1},
+		{TimeLimit: -time.Second},
+		{Processes: -1},
+		{OptimizationLevel: 6, HasOptimizationLevel: true},
+		{RandomSeed: -1, HasRandomSeed: true},
+		{CancelGrace: -time.Second, HasCancelGrace: true},
+	}
+	for _, options := range cases {
+		if err := validateSolveOptions(options); err == nil {
+			t.Fatalf("expected validation error for %+v", options)
+		}
+	}
+}
+
+func TestStatusUnsatOrUnboundedValue(t *testing.T) {
+	if StatusUnsatOrUnbounded != "UNSAT_OR_UNBOUNDED" {
+		t.Fatalf("got %q", StatusUnsatOrUnbounded)
+	}
+}
+
+func TestResultGetIntRejectsNonInteger(t *testing.T) {
+	result := &Result{Solution: map[string]any{"x": 1.5}}
+	if _, err := result.GetInt("x"); err == nil {
+		t.Fatal("expected fractional value error")
+	}
+}
+
+func TestHitTimeLimit(t *testing.T) {
+	cases := []struct {
+		options   SolveOptions
+		status    Status
+		solutions int
+		solveType SolveType
+		want      bool
+	}{
+		{options: SolveOptions{TimeLimit: time.Second}, solutions: 0, want: true},
+		{options: SolveOptions{TimeLimit: time.Second}, solutions: 1, solveType: SolveTypeSatisfy},
+		{options: SolveOptions{TimeLimit: time.Second}, solutions: 1, solveType: SolveTypeMaximize, want: true},
+		{options: SolveOptions{TimeLimit: time.Second, AllSolutions: true}, solutions: 1, want: true},
+		{options: SolveOptions{TimeLimit: time.Second, NumSolutions: 2}, solutions: 1, want: true},
+		{options: SolveOptions{TimeLimit: time.Second, NumSolutions: 1}, solutions: 1},
+		{options: SolveOptions{TimeLimit: time.Second}, status: StatusOptimal, solutions: 1, solveType: SolveTypeMaximize},
+	}
+	for _, test := range cases {
+		if got := hitTimeLimit(&test.options, test.status, test.solutions, test.solveType); got != test.want {
+			t.Fatalf("got %v for %+v", got, test)
+		}
+	}
+}
+
 func TestInstance_Cleanup_RemovesMultipleTempFiles(t *testing.T) {
-	f1, _ := os.CreateTemp("", "mz-clean-*.mzn")
-	f2, _ := os.CreateTemp("", "mz-clean-*.json")
-	f1.Close()
-	f2.Close()
+	f1, err := os.CreateTemp("", "mz-clean-*.mzn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := os.CreateTemp("", "mz-clean-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f2.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	inst := &Instance{
 		tempFile:  f1.Name(),

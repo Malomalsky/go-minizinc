@@ -76,11 +76,15 @@ func TestModel(t *testing.T) {
 func TestModelCopy(t *testing.T) {
 	model := NewModel()
 	model.AddString("var 1..10: x;")
-	model.SetParam("a", 5)
+	if err := model.SetParam("a", 5); err != nil {
+		t.Fatal(err)
+	}
 
 	copy := model.Copy()
 	copy.AddString("solve maximize x;")
-	copy.SetParam("b", 10)
+	if err := copy.SetParam("b", 10); err != nil {
+		t.Fatal(err)
+	}
 
 	codeOrig := model.getCode()
 	codeCopy := copy.getCode()
@@ -150,8 +154,12 @@ func TestSolveWithParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create instance: %v", err)
 	}
-	instance.SetParam("a", 2)
-	instance.SetParam("b", 20)
+	if err := instance.SetParam("a", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.SetParam("b", 20); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

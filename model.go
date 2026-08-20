@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -18,6 +19,7 @@ type Model struct {
 
 	codeFragments  []string
 	dataFiles      []string
+	includeDirs    []string
 	parameters     map[string]any
 	assigned       map[string]bool
 	requiredParams []string // populated by Builder.Build; checked at solve time
@@ -46,20 +48,28 @@ func (m *Model) AddFile(path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, err := os.Stat(path); err != nil {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return wrapError("failed to resolve file path", err)
+	}
+	if _, err := os.Stat(absPath); err != nil {
 		return wrapError("file not found", err)
 	}
 
-	ext := filepath.Ext(path)
+	ext := strings.ToLower(filepath.Ext(absPath))
 	switch ext {
 	case ".mzn":
-		content, err := os.ReadFile(path)
+		content, err := os.ReadFile(absPath)
 		if err != nil {
 			return wrapError("failed to read model file", err)
 		}
 		m.codeFragments = append(m.codeFragments, string(content))
+		dir := filepath.Dir(absPath)
+		if !slices.Contains(m.includeDirs, dir) {
+			m.includeDirs = append(m.includeDirs, dir)
+		}
 	case ".dzn", ".json":
-		m.dataFiles = append(m.dataFiles, path)
+		m.dataFiles = append(m.dataFiles, absPath)
 	default:
 		return newError(fmt.Sprintf("unsupported file extension: %s", ext))
 	}
@@ -71,14 +81,17 @@ func (m *Model) AddFile(path string) error {
 // is solved. Each name may only be assigned once; subsequent assignments
 // return ErrMultipleAssignment.
 func (m *Model) SetParam(name string, value any) error {
+	if _, err := json.Marshal(value); err != nil {
+		return wrapError("invalid parameter value", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.assigned[name] {
 		return ErrMultipleAssignment
 	}
-
-	m.parameters[name] = value
+	m.parameters[name] = deepCopyValue(value)
 	m.assigned[name] = true
 
 	return nil
@@ -90,7 +103,7 @@ func (m *Model) GetParam(name string) (any, bool) {
 	defer m.mu.RUnlock()
 
 	val, ok := m.parameters[name]
-	return val, ok
+	return deepCopyValue(val), ok
 }
 
 // Copy returns a deep copy of the model. Parameter values are deep-copied via
@@ -102,6 +115,7 @@ func (m *Model) Copy() *Model {
 	cloned := &Model{
 		codeFragments:  make([]string, len(m.codeFragments)),
 		dataFiles:      make([]string, len(m.dataFiles)),
+		includeDirs:    slices.Clone(m.includeDirs),
 		parameters:     make(map[string]any, len(m.parameters)),
 		assigned:       make(map[string]bool, len(m.assigned)),
 		requiredParams: append([]string(nil), m.requiredParams...),
@@ -168,6 +182,15 @@ func deepCopyReflect(v reflect.Value) reflect.Value {
 		dst := reflect.New(v.Type()).Elem()
 		for i := 0; i < v.Len(); i++ {
 			dst.Index(i).Set(deepCopyReflect(v.Index(i)))
+		}
+		return dst
+	case reflect.Struct:
+		dst := reflect.New(v.Type()).Elem()
+		dst.Set(v)
+		for i := 0; i < v.NumField(); i++ {
+			if dst.Field(i).CanSet() {
+				dst.Field(i).Set(deepCopyReflect(v.Field(i)))
+			}
 		}
 		return dst
 	case reflect.Pointer:

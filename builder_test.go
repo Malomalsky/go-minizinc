@@ -1,6 +1,7 @@
 package minizinc
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -479,12 +480,8 @@ func TestParseStreamMessage_FallbackToDefaultSection(t *testing.T) {
 	if !ok {
 		t.Fatalf("Solution should contain x: %v", r.Solution)
 	}
-	// parseDZN returns the parsed JSON value (int).
-	if n, ok := v.(float64); !ok || n != 42 {
-		// allow either int or float64 because of json unmarshal
-		if n2, ok2 := v.(int); !ok2 || n2 != 42 {
-			t.Errorf("expected x=42, got %v (%T)", v, v)
-		}
+	if n, ok := v.(json.Number); !ok || n.String() != "42" {
+		t.Errorf("expected x=42, got %v (%T)", v, v)
 	}
 
 	// Non-DZN-shaped "default" leaves Solution empty.
@@ -496,6 +493,101 @@ func TestParseStreamMessage_FallbackToDefaultSection(t *testing.T) {
 	if len(r2.Solution) != 0 {
 		t.Errorf("non-DZN default should leave Solution empty, got %v", r2.Solution)
 	}
+}
+
+func TestParseStreamMessageJSONOutput(t *testing.T) {
+	msg := streamMessage{
+		Type:     "solution",
+		Sections: []string{"json", "explain"},
+		Output: map[string]any{
+			"json": map[string]any{
+				"x":   json.Number("9007199254740993"),
+				"set": []any{json.Number("1"), json.Number("3")},
+			},
+			"explain": "ok",
+			"typed":   map[string]any{"value": true},
+		},
+	}
+	result, err := parseStreamMessage(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Solution["x"].(json.Number).String() != "9007199254740993" {
+		t.Fatalf("integer precision lost: %v", result.Solution["x"])
+	}
+	if result.Output["typed"].(map[string]any)["value"] != true {
+		t.Fatalf("typed output lost: %v", result.Output)
+	}
+	if !sliceEq(result.SectionOrder, []string{"json", "explain"}) {
+		t.Fatalf("section order lost: %v", result.SectionOrder)
+	}
+}
+
+func TestStatisticsKeepsUnknownFields(t *testing.T) {
+	stats := parseStatistics(map[string]any{
+		"nodes":        json.Number("5"),
+		"solverCustom": "value",
+	})
+	if stats.Nodes != 5 || stats.Raw["solverCustom"] != "value" {
+		t.Fatalf("statistics lost fields: %+v", stats)
+	}
+}
+
+func TestStatisticsMessagesMerge(t *testing.T) {
+	first := parseStatistics(map[string]any{"flatTime": json.Number("0.5")})
+	second := parseStatistics(map[string]any{"nodes": json.Number("7")})
+	merged := mergeStatistics(first, second)
+	if merged.FlatTime != 500*time.Millisecond || merged.Nodes != 7 {
+		t.Fatalf("statistics did not merge: %+v", merged)
+	}
+	copy := cloneStatistics(merged)
+	copy.Raw["nodes"] = json.Number("9")
+	if merged.Raw["nodes"].(json.Number).String() != "7" {
+		t.Fatal("statistics clone shares raw map")
+	}
+}
+
+func TestParseDZNRejectsTrailingSyntax(t *testing.T) {
+	value := parseDZN("x = 1..3;")["x"]
+	if value != "1..3" {
+		t.Fatalf("got %v (%T)", value, value)
+	}
+}
+
+func TestBuilderIntArray2DParamIsRequired(t *testing.T) {
+	builder := NewBuilder()
+	rows := builder.IntParam("rows")
+	cols := builder.IntParam("cols")
+	builder.IntArray2DParamSized("matrix", rows, cols)
+	missing := builder.Build().MissingParams()
+	if !sliceEq(missing, []string{"rows", "cols", "matrix"}) {
+		t.Fatalf("got %v", missing)
+	}
+}
+
+func TestAnalyzeModelAllowsWhitespaceBeforeCall(t *testing.T) {
+	model := NewModel()
+	model.AddString("array[1..2] of var 1..2: x; constraint alldifferent (x); solve satisfy;")
+	if !analyzeModel(model).HasGlobalConstraints {
+		t.Fatal("global constraint was not detected")
+	}
+}
+
+func TestAnalyzeModelIgnoresQuotedIdentifier(t *testing.T) {
+	model := NewModel()
+	model.AddString("var 1..2: 'alldifferent (fake)'; solve satisfy;")
+	if analyzeModel(model).HasGlobalConstraints {
+		t.Fatal("quoted identifier triggered global detection")
+	}
+}
+
+func TestVarRejectsInvalidIdentifier(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	Var("not valid")
 }
 
 func TestResult_HitTimeLimit_Field(t *testing.T) {

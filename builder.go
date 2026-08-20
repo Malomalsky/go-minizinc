@@ -135,6 +135,7 @@ func (b *Builder) IntArray2DParamSized(name string, rows, cols Expr) Expr {
 	b.registerName(name, "int 2d array param")
 	b.decls = append(b.decls,
 		fmt.Sprintf("array[1..%s, 1..%s] of int: %s;", rows.code, cols.code, name))
+	b.requiredParams = append(b.requiredParams, name)
 	return ref(name)
 }
 
@@ -459,6 +460,9 @@ func (b *Builder) AllDifferent(args ...Expr) Expr {
 // Var declares a fresh identifier for use in Forall/Exists comprehensions
 // without registering it as a model-level name.
 func Var(name string) Expr {
+	if !identRe.MatchString(name) {
+		panic(fmt.Sprintf("minizinc: invalid identifier %q", name))
+	}
 	return Expr{code: name}
 }
 

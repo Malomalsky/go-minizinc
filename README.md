@@ -11,7 +11,7 @@ go get github.com/Malomalsky/go-minizinc
 ## Requirements
 
 - Go 1.21 or higher
-- MiniZinc 2.6.0 or higher installed and available in PATH
+- MiniZinc 2.6.0 or higher, available in PATH or passed to `NewDriver`
 
 ## Quick Start
 
@@ -36,7 +36,10 @@ func main() {
     model := minizinc.NewModel()
     model.AddString("var 1..10: x; solve maximize x;")
 
-    instance := minizinc.NewInstance(model, solver)
+    instance, err := minizinc.NewInstance(model, solver)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
@@ -46,8 +49,11 @@ func main() {
         log.Fatal(err)
     }
 
-    x, _ := result.GetInt("x")
-    fmt.Printf("x = %d\n", x)
+	x, err := result.GetInt("x")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("x = %d\n", x)
 }
 ```
 
@@ -76,15 +82,24 @@ model.AddString(`
     solve satisfy;
 `)
 
-model.AddFile("model.mzn")
+if err := model.AddFile("model.mzn"); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ### Setting Parameters
 
 ```go
-instance := minizinc.NewInstance(model, solver)
-instance.SetParam("n", 8)
-instance.SetParam("values", []int{1, 2, 3})
+instance, err := minizinc.NewInstance(model, solver)
+if err != nil {
+    log.Fatal(err)
+}
+if err := instance.SetParam("n", 8); err != nil {
+    log.Fatal(err)
+}
+if err := instance.SetParam("values", []int{1, 2, 3}); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ### Finding Solvers
@@ -97,6 +112,13 @@ solver, err := minizinc.FindSolver("coin-bc")
 **Automatic selection:**
 ```go
 instance, err := minizinc.NewInstanceAuto(model)
+```
+
+**Custom MiniZinc binary:**
+```go
+driver, err := minizinc.NewDriver("/opt/minizinc/bin/minizinc")
+solver, err := minizinc.FindSolverForModelWithDriver(model, driver)
+instance, err := minizinc.NewInstance(model, solver)
 ```
 
 **With warnings:**
@@ -174,9 +196,9 @@ case errors.Is(err, minizinc.ErrRuntime):
 ```
 
 **Note on timeouts**: MiniZinc's `--time-limit` (set via `WithTimeLimit`)
-expires with `exit=0` and `Result.Status == StatusUnknown` — no error is
-raised, so `ErrTimeout` does not fire for the normal cooperative timeout
-path. Check `result.Status == minizinc.StatusUnknown` after a bounded solve.
+expires with `exit=0` and may omit the terminal status after emitting feasible
+solutions. No error is raised, so check `result.HitTimeLimit` after a bounded
+solve.
 `ErrTimeout` remains for solver-emitted timeout messages that some
 configurations do produce on stderr.
 
@@ -296,17 +318,17 @@ of requiring MiniZinc ≥ 2.6's stdin support.
 
 ## Output Sections
 
+Solutions use MiniZinc's native JSON output mode by default. This preserves
+integers, floats, booleans, arrays, sets, enums, optional values, tuples and
+records in the representation produced by the installed MiniZinc version.
+Select another native mode with `WithOutputMode(OutputModeDZN)` or
+`WithOutputMode(OutputModeItem)`.
+
 When the model uses MiniZinc's `output [...]` or `output_to_section()`,
 every string-valued section reaches `Result.Sections`. Access with
-`result.Section("explain")`. The default `dzn` section is consumed to fill
-`Result.Solution`.
-
-**Caveat**: a model that defines its own `output [...]` REPLACES MiniZinc's
-default DZN output. In that case `Result.Solution` will be empty and you
-must read values via `result.Section("default")` (or whatever section name
-you used). To keep `Solution` populated alongside human-readable output,
-use `output_to_section("explain", [...])` and leave the default `dzn`
-section alone.
+`result.Section("explain")`. `Result.Output` retains every raw section,
+including JSON-valued sections, and `Result.SectionOrder` preserves the order
+reported by MiniZinc.
 
 ## Cooperative Cancellation
 
@@ -341,7 +363,7 @@ See [examples/](examples/) directory for complete examples:
 - `Copy() *Model` - Create copy
 
 **Instance:**
-- `NewInstance(model *Model, solver *Solver) *Instance` - Create instance with specific solver
+- `NewInstance(model *Model, solver *Solver) (*Instance, error)` - Create instance with specific solver
 - `NewInstanceAuto(model *Model) (*Instance, error)` - Create instance with automatic solver selection
 - `Solve(ctx context.Context, opts ...SolveOption) (*Result, error)` - Find one solution
 - `SolveAll(ctx context.Context, opts ...SolveOption) ([]*Result, error)` - Find all solutions
@@ -363,6 +385,10 @@ See [examples/](examples/) directory for complete examples:
 - `Status` - Solution status (OPTIMAL_SOLUTION, UNSATISFIABLE, etc.)
 - `Solution` - Map of variable names to values
 - `Statistics` - Solver statistics
+- `Statistics.Raw` - All solver-specific statistics
+- `Output` - Raw JSON-stream output sections
+- `SectionOrder` - Output section order reported by MiniZinc
+- `HitTimeLimit` - Whether a bounded search ended before completion
 - `Error` - Error that occurred during solving (used in SolveStream)
 
 ### Solve Options
@@ -374,6 +400,7 @@ See [examples/](examples/) directory for complete examples:
 - `WithRandomSeed(seed int)` - Set random seed
 - `WithFreeSearch()` - Use free search
 - `WithOptimizationLevel(level int)` - Set optimization level (0-5)
+- `WithOutputMode(mode OutputMode)` - Select JSON, DZN or item solution output
 - `WithVerbose()` - Enable verbose output
 - `WithStatistics()` - Enable statistics
 - `WithExtraArgs(args ...string)` - Add custom arguments

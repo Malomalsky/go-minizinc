@@ -26,7 +26,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	instance.SetParam("n", 5)
+	if err := instance.SetParam("n", 5); err != nil {
+		log.Fatal(err)
+	}
 
 	fmt.Printf("Model: array of %d different integers\n", 5)
 	fmt.Println("Analyzing model and selecting best solver...")

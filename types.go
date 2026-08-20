@@ -12,7 +12,7 @@ const (
 	StatusOptimal          Status = "OPTIMAL_SOLUTION"
 	StatusUnsatisfiable    Status = "UNSATISFIABLE"
 	StatusUnbounded        Status = "UNBOUNDED"
-	StatusUnsatOrUnbounded Status = "UNSATISFIABLE_OR_UNBOUNDED"
+	StatusUnsatOrUnbounded Status = "UNSAT_OR_UNBOUNDED"
 	StatusError            Status = "ERROR"
 )
 
@@ -31,19 +31,20 @@ const (
 // reported under the keys "propagations" and "propags" respectively — both
 // kept because different solvers populate one or the other.
 type Statistics struct {
-	Nodes          int64         `json:"nodes,omitempty"`
-	Failures       int64         `json:"failures,omitempty"`
-	RestartCount   int64         `json:"restarts,omitempty"`
-	Variables      int64         `json:"variables,omitempty"`
-	PropagatorRuns int64         `json:"propagations,omitempty"`
-	Propagations   int64         `json:"propags,omitempty"`
-	PeakDepth      int64         `json:"peakDepth,omitempty"`
-	NoGoods        int64         `json:"nogoods,omitempty"`
-	Backtracks     int64         `json:"backjumps,omitempty"`
-	SolveTime      time.Duration `json:"solveTime,omitempty"`
-	InitTime       time.Duration `json:"initTime,omitempty"`
-	FlatTime       time.Duration `json:"flatTime,omitempty"`
-	Paths          int64         `json:"nPaths,omitempty"`
+	Nodes          int64          `json:"nodes,omitempty"`
+	Failures       int64          `json:"failures,omitempty"`
+	RestartCount   int64          `json:"restarts,omitempty"`
+	Variables      int64          `json:"variables,omitempty"`
+	PropagatorRuns int64          `json:"propagations,omitempty"`
+	Propagations   int64          `json:"propags,omitempty"`
+	PeakDepth      int64          `json:"peakDepth,omitempty"`
+	NoGoods        int64          `json:"nogoods,omitempty"`
+	Backtracks     int64          `json:"backjumps,omitempty"`
+	SolveTime      time.Duration  `json:"solveTime,omitempty"`
+	InitTime       time.Duration  `json:"initTime,omitempty"`
+	FlatTime       time.Duration  `json:"flatTime,omitempty"`
+	Paths          int64          `json:"nPaths,omitempty"`
+	Raw            map[string]any `json:"-"`
 }
 
 type streamMessage struct {

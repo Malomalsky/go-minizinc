@@ -37,6 +37,7 @@ func wrapError(msg string, err error) *Error {
 // Sentinel errors returned by the package.
 var (
 	ErrDriverNotFound     = newError("minizinc executable not found in PATH")
+	ErrNilDriver          = newError("driver is nil")
 	ErrInvalidVersion     = newError("minizinc version is too old, need 2.6.0 or higher")
 	ErrSolverNotFound     = newError("solver not found")
 	ErrNilModel           = newError("model is nil")
@@ -155,6 +156,8 @@ func classifyStderr(stderr string) ErrorCategory {
 	case strings.Contains(low, "syntax error") || strings.Contains(low, "parse error"):
 		return CategorySyntax
 	case strings.Contains(low, "runtime error") ||
+		strings.Contains(low, "evaluation error") ||
+		strings.Contains(low, "assertion failed") ||
 		strings.Contains(low, "aborted") ||
 		strings.Contains(low, "segmentation fault") ||
 		strings.Contains(low, "internal error"):

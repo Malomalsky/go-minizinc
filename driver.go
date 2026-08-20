@@ -1,14 +1,15 @@
 package minizinc
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,23 +57,21 @@ func (v *Version) AtLeast(major, minor, patch int) bool {
 }
 
 var (
-	defaultDriver     *Driver
-	defaultDriverErr  error
-	defaultDriverOnce sync.Once
+	defaultDriver   *Driver
+	defaultDriverMu sync.Mutex
 )
 
-// DefaultDriver returns a process-wide Driver bound to the first "minizinc"
-// found on PATH. Initialization is done at most once.
 func DefaultDriver() (*Driver, error) {
-	defaultDriverOnce.Do(func() {
-		defaultDriver, defaultDriverErr = NewDriver("")
-	})
-	if defaultDriver == nil {
-		if defaultDriverErr != nil {
-			return nil, defaultDriverErr
-		}
-		return nil, ErrDriverNotFound
+	defaultDriverMu.Lock()
+	defer defaultDriverMu.Unlock()
+	if defaultDriver != nil {
+		return defaultDriver, nil
 	}
+	driver, err := NewDriver("")
+	if err != nil {
+		return nil, err
+	}
+	defaultDriver = driver
 	return defaultDriver, nil
 }
 
@@ -86,7 +85,7 @@ func NewDriver(path string) (*Driver, error) {
 
 	execPath, err := exec.LookPath(path)
 	if err != nil {
-		return nil, wrapError("failed to find minizinc", err)
+		return nil, fmt.Errorf("%w: %w", ErrDriverNotFound, err)
 	}
 
 	d := &Driver{executable: execPath}
@@ -143,7 +142,11 @@ func (d *Driver) detectVersion() error {
 
 // Version returns the detected MiniZinc version.
 func (d *Driver) Version() *Version {
-	return d.version
+	if d.version == nil {
+		return nil
+	}
+	version := *d.version
+	return &version
 }
 
 func (d *Driver) run(ctx context.Context, args []string) (stdout, stderr []byte, err error) {
@@ -189,6 +192,9 @@ func (d *Driver) runJSON(ctx context.Context, args []string, cfg runConfig) ([]s
 	messages, parseErr := parseJSONStream(&stdout)
 
 	if runErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, newMinizincError("solve", combineErrorText(messages, stderr.String()), runErr)
 	}
 	if parseErr != nil {
@@ -204,25 +210,13 @@ func (d *Driver) runJSON(ctx context.Context, args []string, cfg runConfig) ([]s
 	return messages, nil
 }
 
-func parseJSONStream(r *bytes.Buffer) ([]streamMessage, error) {
+func parseJSONStream(r io.Reader) ([]streamMessage, error) {
 	var messages []streamMessage
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		msg, err := decodeStreamMessageLine(line)
-		if err != nil {
-			return messages, wrapError("failed to parse JSON stream", err)
-		}
+	err := decodeJSONStream(r, func(msg streamMessage) error {
 		messages = append(messages, msg)
-	}
-	if err := scanner.Err(); err != nil {
-		return messages, wrapError("failed to read output", err)
-	}
-	return messages, nil
+		return nil
+	})
+	return messages, err
 }
 
 func collectStreamErrors(messages []streamMessage) string {
@@ -253,14 +247,21 @@ func combineErrorText(messages []streamMessage, stderrText string) string {
 	}
 }
 
-func decodeStreamMessageLine(line string) (streamMessage, error) {
-	var msg streamMessage
-	dec := json.NewDecoder(strings.NewReader(line))
+func decodeJSONStream(r io.Reader, handle func(streamMessage) error) error {
+	dec := json.NewDecoder(r)
 	dec.UseNumber()
-	if err := dec.Decode(&msg); err != nil {
-		return streamMessage{}, err
+	for {
+		var msg streamMessage
+		if err := dec.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return wrapError("failed to parse JSON stream", err)
+		}
+		if err := handle(msg); err != nil {
+			return err
+		}
 	}
-	return msg, nil
 }
 
 func (d *Driver) runJSONStream(ctx context.Context, args []string, cfg runConfig, handle func(streamMessage) error) error {
@@ -289,47 +290,34 @@ func (d *Driver) runJSONStream(ctx context.Context, args []string, cfg runConfig
 		stderrDone <- err
 	}()
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-
 	var streamErrors []streamMessage
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		msg, err := decodeStreamMessageLine(line)
-		if err != nil {
-			_ = cmd.Wait()
-			<-stderrDone
-			return wrapError("failed to parse JSON stream", err)
-		}
-
+	streamErr := decodeJSONStream(stdout, func(msg streamMessage) error {
 		if msg.Type == "error" {
 			streamErrors = append(streamErrors, msg)
-			continue
+			return nil
 		}
-
-		if err := handle(msg); err != nil {
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-			_ = cmd.Wait()
-			<-stderrDone
-			return err
+		return handle(msg)
+	})
+	if streamErr != nil {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
 		_ = cmd.Wait()
 		<-stderrDone
-		return wrapError("failed to read output", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return streamErr
 	}
 
 	err = cmd.Wait()
-	<-stderrDone
+	stderrErr := <-stderrDone
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if stderrErr != nil {
+		return wrapError("failed to read stderr", stderrErr)
+	}
 	if err != nil {
 		return newMinizincError("solve", combineErrorText(streamErrors, stderrBuf.String()), err)
 	}
@@ -345,7 +333,7 @@ func (d *Driver) listSolvers(ctx context.Context) ([]Solver, error) {
 	defer d.solversMu.Unlock()
 
 	if d.solversLoaded {
-		return d.solvers, nil
+		return cloneSolvers(d.solvers), nil
 	}
 
 	out, errOut, err := d.run(ctx, []string{"--solvers-json"})
@@ -365,7 +353,19 @@ func (d *Driver) listSolvers(ctx context.Context) ([]Solver, error) {
 	d.solvers = solvers
 	d.solversLoaded = true
 
-	return solvers, nil
+	return cloneSolvers(solvers), nil
+}
+
+func cloneSolvers(solvers []Solver) []Solver {
+	cloned := slices.Clone(solvers)
+	for i := range cloned {
+		cloned[i].Tags = slices.Clone(cloned[i].Tags)
+		cloned[i].StdFlags = slices.Clone(cloned[i].StdFlags)
+		if cloned[i].ExtraFlags != nil {
+			cloned[i].ExtraFlags = deepCopyValue(cloned[i].ExtraFlags).([]any)
+		}
+	}
+	return cloned
 }
 
 // RefreshSolvers discards the cached solver list so the next call hits

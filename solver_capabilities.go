@@ -23,7 +23,7 @@ func stripCommentsAndStrings(code string) string {
 			}
 		case c == '/' && i+1 < len(code) && code[i+1] == '*':
 			i += 2
-			for i+1 < len(code) && !(code[i] == '*' && code[i+1] == '/') {
+			for i+1 < len(code) && (code[i] != '*' || code[i+1] != '/') {
 				i++
 			}
 			if i+1 < len(code) {
@@ -31,9 +31,10 @@ func stripCommentsAndStrings(code string) string {
 			} else {
 				i = len(code)
 			}
-		case c == '"':
+		case c == '"' || c == '\'':
+			quote := c
 			i++
-			for i < len(code) && code[i] != '"' {
+			for i < len(code) && code[i] != quote {
 				if code[i] == '\\' && i+1 < len(code) {
 					i += 2
 					continue
@@ -183,6 +184,9 @@ func FindBestSolver(filter SolverFilter) (*Solver, error) {
 }
 
 func FindBestSolverWithDriver(filter SolverFilter, driver *Driver) (*Solver, error) {
+	if driver == nil {
+		return nil, ErrNilDriver
+	}
 	solvers, err := driver.listSolvers(context.Background())
 	if err != nil {
 		return nil, err
@@ -255,6 +259,16 @@ func FindBestSolverWithAnalysis(analysis *ModelAnalysis) (*Solver, *SolverScore,
 	if err != nil {
 		return nil, nil, err
 	}
+	return FindBestSolverWithAnalysisAndDriver(analysis, driver)
+}
+
+func FindBestSolverWithAnalysisAndDriver(analysis *ModelAnalysis, driver *Driver) (*Solver, *SolverScore, error) {
+	if driver == nil {
+		return nil, nil, ErrNilDriver
+	}
+	if analysis == nil {
+		analysis = analyzeModel(nil)
+	}
 
 	solvers, err := driver.listSolvers(context.Background())
 	if err != nil {
@@ -265,21 +279,13 @@ func FindBestSolverWithAnalysis(analysis *ModelAnalysis) (*Solver, *SolverScore,
 
 	for i := range solvers {
 		solver := &solvers[i]
+		score := scoreSolver(solver, analysis)
 
-		excluded := false
-		if analysis.HasGlobalConstraints && solver.HasTag("mip") && !solver.HasTag("global") {
-			excluded = true
+		if analysis.UsesFloats && !solver.HasTag("float") {
+			continue
 		}
 
-		if !excluded {
-			score := scoreSolver(solver, analysis)
-
-			if analysis.UsesFloats && !solver.HasTag("float") {
-				continue
-			}
-
-			scores = append(scores, score)
-		}
+		scores = append(scores, score)
 	}
 
 	if len(scores) == 0 {
@@ -324,7 +330,7 @@ func analyzeModel(model *Model) *ModelAnalysis {
 	}
 
 	globalConstraints := []string{
-		"alldifferent", "global_cardinality", "circuit",
+		"alldifferent", "all_different", "global_cardinality", "circuit",
 		"table", "regular", "inverse",
 	}
 
@@ -332,29 +338,31 @@ func analyzeModel(model *Model) *ModelAnalysis {
 		"cumulative", "disjunctive",
 	}
 
-	setConstraints := []string{
-		"set of", "var set", "card", "union", "intersect", "diff",
-	}
+	setTypes := []string{"set of", "var set"}
+	setFunctions := []string{"card", "union", "intersect"}
 
-	// Look only for `name(` so that identifiers containing the same string
-	// (e.g. a variable called all_different_count) do not trigger.
 	for _, g := range globalConstraints {
-		if strings.Contains(codeLower, g+"(") {
+		if hasCall(codeLower, g) {
 			analysis.HasGlobalConstraints = true
 			analysis.GlobalConstraintsUsed = append(analysis.GlobalConstraintsUsed, g)
 		}
 	}
 
 	for _, s := range schedulingConstraints {
-		if strings.Contains(codeLower, s+"(") {
+		if hasCall(codeLower, s) {
 			analysis.HasScheduling = true
 			analysis.HasGlobalConstraints = true
 			analysis.GlobalConstraintsUsed = append(analysis.GlobalConstraintsUsed, s)
 		}
 	}
 
-	for _, s := range setConstraints {
+	for _, s := range setTypes {
 		if strings.Contains(codeLower, s) {
+			analysis.HasSets = true
+		}
+	}
+	for _, s := range setFunctions {
+		if hasCall(codeLower, s) {
 			analysis.HasSets = true
 		}
 	}
@@ -382,13 +390,34 @@ func analyzeModel(model *Model) *ModelAnalysis {
 	return analysis
 }
 
+func hasCall(code, name string) bool {
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\s*\(`).MatchString(code)
+}
+
 func FindSolverForModel(model *Model) (*Solver, error) {
+	if model == nil {
+		return nil, ErrNilModel
+	}
 	analysis := analyzeModel(model)
 	solver, _, err := FindBestSolverWithAnalysis(analysis)
 	return solver, err
 }
 
+func FindSolverForModelWithDriver(model *Model, driver *Driver) (*Solver, error) {
+	if model == nil {
+		return nil, ErrNilModel
+	}
+	if driver == nil {
+		return nil, ErrNilDriver
+	}
+	solver, _, err := FindBestSolverWithAnalysisAndDriver(analyzeModel(model), driver)
+	return solver, err
+}
+
 func FindSolverForModelWithWarnings(model *Model) (*Solver, []string, error) {
+	if model == nil {
+		return nil, nil, ErrNilModel
+	}
 	analysis := analyzeModel(model)
 	solver, score, err := FindBestSolverWithAnalysis(analysis)
 	if err != nil {

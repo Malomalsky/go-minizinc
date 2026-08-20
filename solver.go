@@ -33,6 +33,9 @@ func FindSolver(name string) (*Solver, error) {
 
 // FindSolverWithDriver behaves like FindSolver but uses the given driver.
 func FindSolverWithDriver(name string, driver *Driver) (*Solver, error) {
+	if driver == nil {
+		return nil, ErrNilDriver
+	}
 	solvers, err := driver.listSolvers(context.Background())
 	if err != nil {
 		return nil, err

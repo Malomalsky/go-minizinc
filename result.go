@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"maps"
+	"math"
 	"strings"
 	"time"
 )
@@ -29,12 +32,9 @@ type Result struct {
 	Error          error
 	IsIntermediate bool
 	Sections       map[string]string
+	Output         map[string]any
+	SectionOrder   []string
 
-	// HitTimeLimit is true when WithTimeLimit was set and the solver
-	// returned Status==StatusUnknown — the cooperative-timeout signal that
-	// MiniZinc does NOT surface as an error (exit 0, empty stderr). Use
-	// this flag instead of errors.Is(err, ErrTimeout) to detect the normal
-	// time-limit path.
 	HitTimeLimit bool
 }
 
@@ -59,10 +59,24 @@ func (r *Result) GetInt(name string) (int, error) {
 	case int:
 		return v, nil
 	case float64:
-		return int(v), nil
+		if math.IsNaN(v) || math.IsInf(v, 0) || math.Trunc(v) != v {
+			return 0, fmt.Errorf("variable %s is not an integer", name)
+		}
+		i := int(v)
+		if float64(i) != v {
+			return 0, fmt.Errorf("variable %s overflows int", name)
+		}
+		return i, nil
 	case json.Number:
 		i, err := v.Int64()
-		return int(i), err
+		if err != nil {
+			return 0, err
+		}
+		converted := int(i)
+		if int64(converted) != i {
+			return 0, fmt.Errorf("variable %s overflows int", name)
+		}
+		return converted, nil
 	default:
 		return 0, fmt.Errorf("variable %s is not an integer", name)
 	}
@@ -169,7 +183,7 @@ func parseDZN(dzn string) map[string]any {
 		valueStr = strings.TrimSpace(valueStr)
 
 		var value any
-		if err := json.Unmarshal([]byte(valueStr), &value); err != nil {
+		if !decodeJSONValue(valueStr, &value) {
 			result[name] = valueStr
 		} else {
 			result[name] = value
@@ -185,8 +199,10 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 		status = StatusSatisfied
 	}
 	result := &Result{
-		Status:   status,
-		Solution: make(map[string]any),
+		Status:       status,
+		Solution:     make(map[string]any),
+		Output:       maps.Clone(msg.Output),
+		SectionOrder: append([]string(nil), msg.Sections...),
 	}
 
 	if msg.Type == "solution" && msg.Solution != nil {
@@ -194,6 +210,11 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 	}
 
 	if msg.Type == "solution" && msg.Output != nil {
+		if len(result.Solution) == 0 {
+			if solution, ok := parseJSONSolution(msg.Output["json"]); ok {
+				result.Solution = solution
+			}
+		}
 		if len(result.Solution) == 0 {
 			// Default DZN section. When the model overrides output with
 			// `output [...]`, MiniZinc writes the formatted text to "default"
@@ -206,7 +227,7 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 			}
 		}
 		for k, v := range msg.Output {
-			if k == "dzn" {
+			if k == "dzn" || k == "json" {
 				continue
 			}
 			if s, ok := v.(string); ok {
@@ -219,6 +240,28 @@ func parseStreamMessage(msg streamMessage) (*Result, error) {
 	}
 
 	return result, nil
+}
+
+func parseJSONSolution(value any) (map[string]any, bool) {
+	switch value := value.(type) {
+	case map[string]any:
+		return value, true
+	case string:
+		var solution map[string]any
+		if decodeJSONValue(value, &solution) && solution != nil {
+			return solution, true
+		}
+	}
+	return nil, false
+}
+
+func decodeJSONValue(value string, dst any) bool {
+	dec := json.NewDecoder(strings.NewReader(value))
+	dec.UseNumber()
+	if err := dec.Decode(dst); err != nil {
+		return false
+	}
+	return dec.Decode(&struct{}{}) == io.EOF
 }
 
 func parseStatisticsFromMessage(msg streamMessage) (Statistics, bool) {
@@ -237,7 +280,7 @@ func parseStatisticsFromMessage(msg streamMessage) (Statistics, bool) {
 }
 
 func parseStatistics(stats map[string]any) Statistics {
-	var out Statistics
+	out := Statistics{Raw: maps.Clone(stats)}
 
 	setInt := func(dst *int64, key string) {
 		if v, ok := stats[key]; ok {
@@ -271,6 +314,20 @@ func parseStatistics(stats map[string]any) Statistics {
 	setDuration(&out.FlatTime, "flatTime")
 
 	return out
+}
+
+func mergeStatistics(current, next Statistics) Statistics {
+	raw := maps.Clone(current.Raw)
+	if raw == nil {
+		raw = make(map[string]any)
+	}
+	maps.Copy(raw, next.Raw)
+	return parseStatistics(raw)
+}
+
+func cloneStatistics(stats Statistics) Statistics {
+	stats.Raw = maps.Clone(stats.Raw)
+	return stats
 }
 
 func numberToFloat64(v any) (float64, bool) {

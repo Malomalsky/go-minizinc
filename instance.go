@@ -22,11 +22,6 @@ type Instance struct {
 	tempFiles []string
 }
 
-// cmdlineJSONLimit controls when getDataJSON output is written to a temporary
-// .json data file and passed via -d, instead of inlined with
-// --cmdline-json-data. Keep below the cross-platform ARG_MAX comfort zone.
-const cmdlineJSONLimit = 64 * 1024
-
 // NewInstance returns an Instance bound to the given solver. If solver is nil,
 // FindSolverForModel is used to pick one automatically.
 func NewInstance(model *Model, solver *Solver) (*Instance, error) {
@@ -102,7 +97,7 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	if err != nil {
 		return nil, err
 	}
-	defer inst.cleanupLocked()
+	defer func() { _ = inst.cleanupLocked() }()
 
 	cfg := runConfigFor(options)
 	cfg.stdin = stdin
@@ -115,6 +110,7 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	var finalStatus = StatusUnknown
 	var finalStats Statistics
 	var hasStats bool
+	var solutionCount int
 
 	for _, msg := range messages {
 		switch msg.Type {
@@ -124,9 +120,10 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 				return nil, err
 			}
 			lastResult = result
+			solutionCount++
 		case "statistics":
 			if stats, ok := parseStatisticsFromMessage(msg); ok {
-				finalStats = stats
+				finalStats = mergeStatistics(finalStats, stats)
 				hasStats = true
 			}
 		case "status":
@@ -140,7 +137,7 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 			Solution: make(map[string]any),
 		}
 		if hasStats {
-			result.Statistics = finalStats
+			result.Statistics = cloneStatistics(finalStats)
 		}
 		if options.TimeLimit > 0 && result.Status == StatusUnknown {
 			result.HitTimeLimit = true
@@ -152,11 +149,9 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 		lastResult.Status = finalStatus
 	}
 	if hasStats {
-		lastResult.Statistics = finalStats
+		lastResult.Statistics = cloneStatistics(finalStats)
 	}
-	if options.TimeLimit > 0 && lastResult.Status == StatusUnknown {
-		lastResult.HitTimeLimit = true
-	}
+	lastResult.HitTimeLimit = hitTimeLimit(options, finalStatus, solutionCount, analyzeModel(inst.model).SolveType)
 	return lastResult, nil
 }
 
@@ -182,7 +177,7 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	if err != nil {
 		return nil, err
 	}
-	defer inst.cleanupLocked()
+	defer func() { _ = inst.cleanupLocked() }()
 
 	cfg := runConfigFor(options)
 	cfg.stdin = stdin
@@ -206,7 +201,7 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 			results = append(results, result)
 		case "statistics":
 			if stats, ok := parseStatisticsFromMessage(msg); ok {
-				finalStats = stats
+				finalStats = mergeStatistics(finalStats, stats)
 				hasStats = true
 			}
 		case "status":
@@ -219,14 +214,12 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	}
 	if hasStats {
 		for _, r := range results {
-			r.Statistics = finalStats
+			r.Statistics = cloneStatistics(finalStats)
 		}
 	}
-	if options.TimeLimit > 0 && len(results) > 0 {
+	if len(results) > 0 {
 		last := results[len(results)-1]
-		if last.Status == StatusUnknown {
-			last.HitTimeLimit = true
-		}
+		last.HitTimeLimit = hitTimeLimit(options, finalStatus, len(results), analyzeModel(inst.model).SolveType)
 	}
 
 	// Empty result with a known terminal status (UNSAT / UNBOUNDED) or a
@@ -238,7 +231,7 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 			Solution: make(map[string]any),
 		}
 		if hasStats {
-			r.Statistics = finalStats
+			r.Statistics = cloneStatistics(finalStats)
 		}
 		if options.TimeLimit > 0 && r.Status == StatusUnknown {
 			r.HitTimeLimit = true
@@ -285,7 +278,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			}
 			return
 		}
-		defer inst.cleanupLocked()
+		defer func() { _ = inst.cleanupLocked() }()
 
 		cfg := runConfigFor(options)
 		cfg.stdin = stdin
@@ -294,6 +287,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 		var latestStats Statistics
 		var hasStats bool
 		var pending *Result
+		var solutionCount int
 
 		flush := func() error {
 			if pending == nil {
@@ -303,7 +297,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			pending = nil
 			r.IsIntermediate = true
 			if hasStats {
-				r.Statistics = latestStats
+				r.Statistics = cloneStatistics(latestStats)
 			}
 			select {
 			case ch <- r:
@@ -317,7 +311,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			switch msg.Type {
 			case "statistics":
 				if stats, ok := parseStatisticsFromMessage(msg); ok {
-					latestStats = stats
+					latestStats = mergeStatistics(latestStats, stats)
 					hasStats = true
 				}
 			case "solution":
@@ -329,6 +323,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 					return err
 				}
 				pending = result
+				solutionCount++
 			case "status":
 				finalStatus = msg.Status
 			}
@@ -351,12 +346,10 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 				pending.Status = finalStatus
 			}
 			if hasStats {
-				pending.Statistics = latestStats
+				pending.Statistics = cloneStatistics(latestStats)
 			}
 			pending.IsIntermediate = false
-			if options.TimeLimit > 0 && pending.Status == StatusUnknown {
-				pending.HitTimeLimit = true
-			}
+			pending.HitTimeLimit = hitTimeLimit(options, finalStatus, solutionCount, analyzeModel(inst.model).SolveType)
 			select {
 			case ch <- pending:
 			case <-ctx.Done():
@@ -374,7 +367,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 				Solution: make(map[string]any),
 			}
 			if hasStats {
-				r.Statistics = latestStats
+				r.Statistics = cloneStatistics(latestStats)
 			}
 			if options.TimeLimit > 0 && r.Status == StatusUnknown {
 				r.HitTimeLimit = true
@@ -423,9 +416,25 @@ func (inst *Instance) cleanupLocked() error {
 }
 
 func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, error) {
+	if err := validateSolveOptions(options); err != nil {
+		return nil, nil, err
+	}
+
 	code := inst.model.getCode()
 
 	args := []string{"--solver", inst.solver.ID}
+	mode := options.OutputMode
+	if mode == "" {
+		mode = OutputModeJSON
+	}
+	args = append(args, "--output-mode", string(mode))
+	if mode != OutputModeItem {
+		args = append(args, "--output-output-item")
+	}
+
+	for _, includeDir := range inst.model.includeDirs {
+		args = append(args, "-I", includeDir)
+	}
 
 	dataJSON, err := inst.model.getDataJSON()
 	if err != nil {
@@ -433,32 +442,29 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, 
 	}
 
 	if dataJSON != "" {
-		if len(dataJSON) > cmdlineJSONLimit {
-			dataPath, err := writeTempJSON(dataJSON)
-			if err != nil {
-				return nil, nil, err
-			}
-			inst.tempFiles = append(inst.tempFiles, dataPath)
-			args = append(args, "-d", dataPath)
-		} else {
-			args = append(args, "--cmdline-json-data", dataJSON)
+		dataPath, err := writeTempJSON(dataJSON)
+		if err != nil {
+			return nil, nil, err
 		}
+		inst.tempFiles = append(inst.tempFiles, dataPath)
+		args = append(args, "-d", dataPath)
 	}
 
 	for _, dataFile := range inst.model.dataFiles {
 		args = append(args, "-d", dataFile)
 	}
 
-	if options.AllSolutions {
-		args = append(args, "-a")
-	}
-
 	if options.NumSolutions > 0 {
 		args = append(args, "--num-solutions", strconv.Itoa(options.NumSolutions))
+	} else if options.AllSolutions {
+		args = append(args, "-a")
 	}
 
 	if options.TimeLimit > 0 {
 		ms := options.TimeLimit.Milliseconds()
+		if ms == 0 {
+			ms = 1
+		}
 		args = append(args, "--time-limit", strconv.FormatInt(ms, 10))
 	}
 
@@ -474,7 +480,7 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, 
 		args = append(args, "-f")
 	}
 
-	if options.OptimizationLevel > 0 {
+	if options.HasOptimizationLevel {
 		args = append(args, fmt.Sprintf("-O%d", options.OptimizationLevel))
 	}
 
@@ -495,6 +501,7 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, 
 	} else {
 		tmpName, err := writeTempModel(code)
 		if err != nil {
+			_ = inst.cleanupLocked()
 			return nil, nil, err
 		}
 		args = append(args, tmpName)
@@ -505,6 +512,46 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, 
 		options.CommandHook(append([]string(nil), args...))
 	}
 	return args, stdin, nil
+}
+
+func validateSolveOptions(options *SolveOptions) error {
+	switch options.OutputMode {
+	case "", OutputModeJSON, OutputModeDZN, OutputModeItem:
+	default:
+		return newError(fmt.Sprintf("invalid output mode %q", options.OutputMode))
+	}
+	if options.NumSolutions < 0 {
+		return newError("number of solutions must not be negative")
+	}
+	if options.TimeLimit < 0 {
+		return newError("time limit must not be negative")
+	}
+	if options.Processes < 0 {
+		return newError("process count must not be negative")
+	}
+	if options.HasOptimizationLevel && (options.OptimizationLevel < 0 || options.OptimizationLevel > 5) {
+		return newError("optimization level must be between 0 and 5")
+	}
+	if options.HasRandomSeed && options.RandomSeed < 0 {
+		return newError("random seed must not be negative")
+	}
+	if options.HasCancelGrace && options.CancelGrace < 0 {
+		return newError("cancel grace must not be negative")
+	}
+	return nil
+}
+
+func hitTimeLimit(options *SolveOptions, finalStatus Status, solutions int, solveType SolveType) bool {
+	if options.TimeLimit <= 0 || finalStatus != "" && finalStatus != StatusUnknown {
+		return false
+	}
+	if solutions == 0 {
+		return true
+	}
+	if options.NumSolutions > 0 {
+		return solutions < options.NumSolutions
+	}
+	return options.AllSolutions || solveType != SolveTypeSatisfy
 }
 
 func (inst *Instance) checkRequiredParamsLocked() error {

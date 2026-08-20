@@ -2,24 +2,34 @@ package minizinc
 
 import "time"
 
+type OutputMode string
+
+const (
+	OutputModeJSON OutputMode = "json"
+	OutputModeDZN  OutputMode = "dzn"
+	OutputModeItem OutputMode = "item"
+)
+
 // SolveOptions configures a single solve invocation. Build with the
 // functional With* helpers; do not mutate directly except in tests.
 type SolveOptions struct {
-	AllSolutions      bool
-	NumSolutions      int
-	TimeLimit         time.Duration
-	Processes         int
-	RandomSeed        int
-	HasRandomSeed     bool
-	FreeSearch        bool
-	OptimizationLevel int
-	Verbose           bool
-	Statistics        bool
-	ExtraArgs         []string
-	CommandHook       func([]string)
-	CancelGrace       time.Duration
-	HasCancelGrace    bool
-	ModelViaStdin     bool
+	AllSolutions         bool
+	NumSolutions         int
+	TimeLimit            time.Duration
+	Processes            int
+	RandomSeed           int
+	HasRandomSeed        bool
+	FreeSearch           bool
+	OptimizationLevel    int
+	HasOptimizationLevel bool
+	Verbose              bool
+	Statistics           bool
+	ExtraArgs            []string
+	CommandHook          func([]string)
+	CancelGrace          time.Duration
+	HasCancelGrace       bool
+	ModelViaStdin        bool
+	OutputMode           OutputMode
 }
 
 // defaultCancelGrace is the time we give MiniZinc to flush stats and exit
@@ -70,6 +80,13 @@ func WithFreeSearch() SolveOption {
 func WithOptimizationLevel(level int) SolveOption {
 	return func(o *SolveOptions) {
 		o.OptimizationLevel = level
+		o.HasOptimizationLevel = true
+	}
+}
+
+func WithOutputMode(mode OutputMode) SolveOption {
+	return func(o *SolveOptions) {
+		o.OutputMode = mode
 	}
 }
 

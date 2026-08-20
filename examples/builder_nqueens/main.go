@@ -34,7 +34,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	instance.SetParam("n", 8)
+	if err := instance.SetParam("n", 8); err != nil {
+		log.Fatal(err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
