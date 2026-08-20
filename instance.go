@@ -41,6 +41,9 @@ func NewInstance(model *Model, solver *Solver) (*Instance, error) {
 		return nil, ErrNoSolver
 	}
 
+	clonedSolvers := cloneSolvers([]Solver{*solver})
+	solver = &clonedSolvers[0]
+
 	driver := solver.driver
 	if driver == nil {
 		var err error

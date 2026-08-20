@@ -539,6 +539,27 @@ func TestSolverCacheReturnsCopies(t *testing.T) {
 	}
 }
 
+func TestNewInstanceCopiesSolver(t *testing.T) {
+	driver := &Driver{}
+	solver := &Solver{
+		ID:         "solver",
+		Tags:       []string{"cp"},
+		ExtraFlags: []any{map[string]any{"name": "flag"}},
+		driver:     driver,
+	}
+	instance, err := NewInstance(NewModel("solve satisfy;"), solver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	solver.ID = "changed"
+	solver.Tags[0] = "changed"
+	solver.ExtraFlags[0].(map[string]any)["name"] = "changed"
+	if instance.solver.ID != "solver" || instance.solver.Tags[0] != "cp" ||
+		instance.solver.ExtraFlags[0].(map[string]any)["name"] != "flag" {
+		t.Fatalf("instance solver changed: %+v", instance.solver)
+	}
+}
+
 func TestDriverVersionReturnsCopy(t *testing.T) {
 	driver := &Driver{version: &Version{Major: 2, Minor: 6}}
 	version := driver.Version()

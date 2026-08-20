@@ -1,6 +1,9 @@
 package minizinc
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // SolverOptions is a renderer of solver-specific CLI flags. Pass an
 // implementation to WithSolverOptions to append its Args() to the final argv.
@@ -54,13 +57,13 @@ func (g GecodeOptions) Args() []string {
 		a = append(a, "--restart-base", strconv.FormatFloat(g.RestartBase, 'g', -1, 64))
 	}
 	if g.NodeLimit > 0 {
-		a = append(a, "--node-limit", strconv.Itoa(g.NodeLimit))
+		a = append(a, "--node", strconv.Itoa(g.NodeLimit))
 	}
 	if g.FailLimit > 0 {
-		a = append(a, "--fail-limit", strconv.Itoa(g.FailLimit))
+		a = append(a, "--fail", strconv.Itoa(g.FailLimit))
 	}
 	if g.TimeLimitMS > 0 {
-		a = append(a, "--time", strconv.Itoa(g.TimeLimitMS))
+		a = append(a, "-t", strconv.Itoa(g.TimeLimitMS))
 	}
 	return a
 }
@@ -72,8 +75,8 @@ type ChuffedOptions struct {
 	FreeSearch bool
 	// VSIDS enables the VSIDS variable-selection heuristic.
 	VSIDS bool
-	// EagerLazyFD enables eager propagation of lazy FD constraints.
 	EagerLazyFD bool
+	EagerLimit  int
 	// LearntPool sets the maximum number of learnt clauses retained.
 	LearntPool int
 }
@@ -83,14 +86,21 @@ func (c ChuffedOptions) Args() []string {
 	if c.FreeSearch {
 		a = append(a, "-f")
 	}
+	var backend []string
 	if c.VSIDS {
-		a = append(a, "--toggle-vsids")
+		backend = append(backend, "--vsids")
 	}
 	if c.EagerLazyFD {
-		a = append(a, "--eager-lazy-fd")
+		backend = append(backend, "--lazy", "on")
+	}
+	if c.EagerLimit > 0 {
+		backend = append(backend, "--eager-limit", strconv.Itoa(c.EagerLimit))
 	}
 	if c.LearntPool > 0 {
-		a = append(a, "--learnts-mlimit", strconv.Itoa(c.LearntPool))
+		backend = append(backend, "--n-of-learnts", strconv.Itoa(c.LearntPool))
+	}
+	if len(backend) > 0 {
+		a = append(a, "--fzn-flags", strings.Join(backend, " "))
 	}
 	return a
 }
@@ -110,7 +120,7 @@ type CoinBCOptions struct {
 func (c CoinBCOptions) Args() []string {
 	var a []string
 	if c.PrintLevel > 0 {
-		a = append(a, "--printLevel", strconv.Itoa(c.PrintLevel))
+		a = append(a, "--cbc-logLevel", strconv.Itoa(c.PrintLevel))
 	}
 	if c.AbsGap > 0 {
 		a = append(a, "--absGap", strconv.FormatFloat(c.AbsGap, 'g', -1, 64))
@@ -119,7 +129,7 @@ func (c CoinBCOptions) Args() []string {
 		a = append(a, "--relGap", strconv.FormatFloat(c.RelGap, 'g', -1, 64))
 	}
 	if c.MaxNodes > 0 {
-		a = append(a, "--maxNodes", strconv.Itoa(c.MaxNodes))
+		a = append(a, "--cbc-maxNodes", strconv.Itoa(c.MaxNodes))
 	}
 	return a
 }

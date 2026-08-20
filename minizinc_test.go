@@ -333,6 +333,52 @@ func TestOptions(t *testing.T) {
 	}
 }
 
+func TestGecodeSolverOptions(t *testing.T) {
+	solver, err := FindSolver("gecode")
+	if err != nil {
+		t.Skipf("solver not found: %v", err)
+	}
+	instance, err := NewInstance(NewModel("var 1..10: x; solve satisfy;"), solver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = instance.Solve(ctx, WithSolverOptions(GecodeOptions{
+		RestartStrategy: "luby",
+		RestartScale:    100,
+		RestartBase:     1.5,
+		NodeLimit:       1000,
+		FailLimit:       1000,
+		TimeLimitMS:     5000,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoinBCSolverOptions(t *testing.T) {
+	solver, err := FindSolver("coin-bc")
+	if err != nil {
+		t.Skipf("solver not found: %v", err)
+	}
+	instance, err := NewInstance(NewModel("var 1..10: x; solve maximize x;"), solver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = instance.Solve(ctx, WithSolverOptions(CoinBCOptions{
+		PrintLevel: 1,
+		AbsGap:     0.01,
+		RelGap:     0.01,
+		MaxNodes:   1000,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAutoSolver(t *testing.T) {
 	model := NewModel()
 	model.AddString("var 1..10: x; solve maximize x;")

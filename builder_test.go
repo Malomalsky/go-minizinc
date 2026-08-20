@@ -141,19 +141,29 @@ func TestSolverOptions_Gecode(t *testing.T) {
 	g := GecodeOptions{
 		RestartStrategy: "luby",
 		RestartScale:    100,
+		RestartBase:     1.5,
 		NodeLimit:       5000,
+		FailLimit:       4000,
+		TimeLimitMS:     3000,
 	}
 	got := g.Args()
-	want := []string{"--restart", "luby", "--restart-scale", "100", "--node-limit", "5000"}
+	want := []string{
+		"--restart", "luby",
+		"--restart-scale", "100",
+		"--restart-base", "1.5",
+		"--node", "5000",
+		"--fail", "4000",
+		"-t", "3000",
+	}
 	if !sliceEq(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
 func TestSolverOptions_Chuffed(t *testing.T) {
-	c := ChuffedOptions{FreeSearch: true, VSIDS: true, LearntPool: 200}
+	c := ChuffedOptions{FreeSearch: true, VSIDS: true, EagerLazyFD: true, EagerLimit: 1000, LearntPool: 200}
 	got := c.Args()
-	want := []string{"-f", "--toggle-vsids", "--learnts-mlimit", "200"}
+	want := []string{"-f", "--fzn-flags", "--vsids --lazy on --eager-limit 1000 --n-of-learnts 200"}
 	if !sliceEq(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
@@ -162,7 +172,7 @@ func TestSolverOptions_Chuffed(t *testing.T) {
 func TestSolverOptions_CoinBC(t *testing.T) {
 	c := CoinBCOptions{PrintLevel: 1, RelGap: 0.01, MaxNodes: 10000}
 	got := c.Args()
-	want := []string{"--printLevel", "1", "--relGap", "0.01", "--maxNodes", "10000"}
+	want := []string{"--cbc-logLevel", "1", "--relGap", "0.01", "--cbc-maxNodes", "10000"}
 	if !sliceEq(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
@@ -171,7 +181,7 @@ func TestSolverOptions_CoinBC(t *testing.T) {
 func TestWithSolverOptions_Appends(t *testing.T) {
 	o := &SolveOptions{}
 	WithSolverOptions(GecodeOptions{NodeLimit: 100})(o)
-	if !sliceEq(o.ExtraArgs, []string{"--node-limit", "100"}) {
+	if !sliceEq(o.ExtraArgs, []string{"--node", "100"}) {
 		t.Errorf("got %v", o.ExtraArgs)
 	}
 }
