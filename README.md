@@ -4,6 +4,10 @@
   <img src="docs/assets/go-minizinc-logo.png" alt="go-minizinc: Go bindings for MiniZinc" width="720">
 </p>
 
+<p align="center">
+  <a href="https://github.com/Malomalsky/go-minizinc/actions/workflows/ci.yml"><img src="https://github.com/Malomalsky/go-minizinc/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+</p>
+
 Go bindings for the [MiniZinc](https://www.minizinc.org/) command-line tool.
 Build or load a model, provide data for each solve, choose an installed solver,
 and decode solutions into Go values.
@@ -121,6 +125,34 @@ instance. They override defaults set with `Model.SetParam` or
 
 Builder-declared parameters are checked before a subprocess starts. Missing
 values are returned as `*minizinc.MissingParamsError`.
+
+MiniZinc sets and enum values use their native JSON representation:
+
+```go
+result, err := instance.Solve(ctx, minizinc.WithParams(minizinc.Params{
+	"allowed":           minizinc.Set[int]{
+		Elements: []int{5},
+		Ranges:   []minizinc.SetRange[int]{{Min: 1, Max: 3}},
+	},
+	"requested_country": minizinc.Enum{Value: "England"},
+	"requested_node":    minizinc.Enum{Constructor: "Right", Argument: 2},
+}))
+if err != nil {
+	log.Fatal(err)
+}
+
+var solution struct {
+	Selected minizinc.Set[int] `json:"selected"`
+	Country  minizinc.Enum     `json:"country"`
+	Node     minizinc.Enum     `json:"node"`
+}
+if err := result.Decode(&solution); err != nil {
+	log.Fatal(err)
+}
+```
+
+`Set[T]` supports individual elements and inclusive ranges. `Enum` supports
+named values, nested constructors, and integer constructor arguments.
 
 ## Solver Selection
 
@@ -245,6 +277,22 @@ Request solver statistics with `WithStatistics`. Common fields are available
 on `Result.Statistics`; solver-specific values remain in
 `Result.Statistics.Raw`.
 
+MiniZinc warnings and solution-checker output are retained on the terminal
+result:
+
+```go
+for _, warning := range result.Warnings {
+	log.Printf("MiniZinc warning: %s", warning.Message)
+}
+for _, message := range result.CheckerMessages {
+	log.Printf("checker %s: %s", message.Type, message.Message)
+}
+```
+
+For `SolveAll` and `SolveStream`, diagnostics are attached only to the last
+result so they are not duplicated for every solution. Locations, stack frames,
+and checker output remain available in their original JSON shapes.
+
 ## Errors and Cancellation
 
 Process failures are returned as `*minizinc.MinizincError` with the failing
@@ -306,6 +354,8 @@ added with `AddString`. Lower-level integrations can use `WithExtraArgs`,
 ## Compatibility
 
 - Go 1.21+ and MiniZinc 2.6+ are supported by the public API and CLI driver.
+- CI tests Go 1.21 and the current stable Go release; integration runs against
+  MiniZinc 2.6.4 and 2.10.0 on stable Go.
 - Process execution and temporary model/data files are portable across macOS,
   Linux, and Windows; available solvers depend on the MiniZinc installation.
 - Each solve launches a MiniZinc process. Reusing an `Instance` avoids API
@@ -330,6 +380,12 @@ Complete symbol documentation is available through
 go test ./...
 go test -race ./...
 go vet ./...
+golangci-lint run ./...
 ```
 
 Tests that require MiniZinc or a particular solver skip when it is unavailable.
+CI also builds the module for Linux amd64, Windows amd64, and Darwin arm64.
+
+## License
+
+[MIT](LICENSE)
