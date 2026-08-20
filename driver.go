@@ -302,16 +302,16 @@ func (d *Driver) runJSONStream(ctx context.Context, args []string, cfg runConfig
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		_ = cmd.Wait()
 		<-stderrDone
+		_ = cmd.Wait()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		return streamErr
 	}
 
-	err = cmd.Wait()
 	stderrErr := <-stderrDone
+	err = cmd.Wait()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
