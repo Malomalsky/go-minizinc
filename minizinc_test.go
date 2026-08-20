@@ -133,6 +133,14 @@ func TestSimpleSolve(t *testing.T) {
 	if x != 10 {
 		t.Fatalf("expected x=10, got %d", x)
 	}
+
+	objective, err := result.GetInt("_objective")
+	if err != nil {
+		t.Fatalf("failed to get objective: %v", err)
+	}
+	if objective != 10 {
+		t.Fatalf("expected objective=10, got %d", objective)
+	}
 }
 
 func TestSolveWithParams(t *testing.T) {
@@ -230,7 +238,7 @@ func TestSolveScopedParams(t *testing.T) {
 }
 
 func TestSolveAll(t *testing.T) {
-	solver, err := FindSolver("coin-bc")
+	solver, err := FindSolver("gecode")
 	if err != nil {
 		t.Skipf("solver not found: %v", err)
 	}
@@ -273,7 +281,7 @@ func TestSolveAll(t *testing.T) {
 }
 
 func TestSolveStream(t *testing.T) {
-	solver, err := FindSolver("coin-bc")
+	solver, err := FindSolver("gecode")
 	if err != nil {
 		t.Skipf("solver not found: %v", err)
 	}
@@ -291,6 +299,9 @@ func TestSolveStream(t *testing.T) {
 
 	count := 0
 	for result := range instance.SolveStream(ctx) {
+		if result.Error != nil {
+			t.Fatal(result.Error)
+		}
 		count++
 		_, err := result.GetInt("x")
 		if err != nil {

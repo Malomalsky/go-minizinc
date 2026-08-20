@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 )
@@ -425,6 +426,9 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, 
 	if err := validateSolveOptions(options); err != nil {
 		return nil, nil, err
 	}
+	if err := validateSolverOptions(inst.solver, options); err != nil {
+		return nil, nil, err
+	}
 
 	code := inst.model.getCode()
 
@@ -435,7 +439,7 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, 
 	}
 	args = append(args, "--output-mode", string(mode))
 	if mode != OutputModeItem {
-		args = append(args, "--output-output-item")
+		args = append(args, "--output-output-item", "--output-objective")
 	}
 
 	for _, includeDir := range inst.model.includeDirs {
@@ -460,7 +464,7 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, 
 		args = append(args, "-d", dataFile)
 	}
 
-	if options.NumSolutions > 0 {
+	if options.NumSolutions > 1 {
 		args = append(args, "--num-solutions", strconv.Itoa(options.NumSolutions))
 	} else if options.AllSolutions {
 		args = append(args, "-a")
@@ -529,6 +533,9 @@ func validateSolveOptions(options *SolveOptions) error {
 	if options.NumSolutions < 0 {
 		return newError("number of solutions must not be negative")
 	}
+	if options.AllSolutions && options.NumSolutions > 0 {
+		return newError("all solutions and number of solutions are mutually exclusive")
+	}
 	if options.TimeLimit < 0 {
 		return newError("time limit must not be negative")
 	}
@@ -543,6 +550,21 @@ func validateSolveOptions(options *SolveOptions) error {
 	}
 	if options.HasCancelGrace && options.CancelGrace < 0 {
 		return newError("cancel grace must not be negative")
+	}
+	return nil
+}
+
+func validateSolverOptions(solver *Solver, options *SolveOptions) error {
+	if len(solver.StdFlags) == 0 {
+		return nil
+	}
+	if options.AllSolutions && !slices.Contains(solver.StdFlags, "-a") {
+		return newError(fmt.Sprintf("solver %q does not support all-solution enumeration", solver.ID))
+	}
+	if options.NumSolutions > 1 &&
+		!slices.Contains(solver.StdFlags, "-n") &&
+		!slices.Contains(solver.StdFlags, "-n-o") {
+		return newError(fmt.Sprintf("solver %q does not support multiple-solution enumeration", solver.ID))
 	}
 	return nil
 }

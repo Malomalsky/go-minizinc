@@ -605,7 +605,7 @@ func TestBuildArgsDefaultsToJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"--output-mode json", "--output-output-item", "-O0", "-d", "--time-limit 1"} {
+	for _, want := range []string{"--output-mode json", "--output-output-item", "--output-objective", "-O0", "-d", "--time-limit 1"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in %q", want, joined)
 		}
@@ -619,6 +619,7 @@ func TestValidateSolveOptions(t *testing.T) {
 	cases := []*SolveOptions{
 		{OutputMode: "xml"},
 		{NumSolutions: -1},
+		{AllSolutions: true, NumSolutions: 1},
 		{TimeLimit: -time.Second},
 		{Processes: -1},
 		{OptimizationLevel: 6, HasOptimizationLevel: true},
@@ -629,6 +630,31 @@ func TestValidateSolveOptions(t *testing.T) {
 		if err := validateSolveOptions(options); err == nil {
 			t.Fatalf("expected validation error for %+v", options)
 		}
+	}
+}
+
+func TestBuildArgsRejectsUnsupportedEnumeration(t *testing.T) {
+	instance := &Instance{
+		model:  NewModel("var 1..2: x; solve satisfy;"),
+		solver: &Solver{ID: "mip", StdFlags: []string{"-p", "-s"}},
+	}
+	defer func() { _ = instance.cleanupLocked() }()
+
+	for _, options := range []*SolveOptions{
+		{AllSolutions: true},
+		{NumSolutions: 2},
+	} {
+		if _, _, err := instance.buildArgsLocked(options); err == nil {
+			t.Fatalf("expected unsupported enumeration error for %+v", options)
+		}
+	}
+
+	args, _, err := instance.buildArgsLocked(&SolveOptions{NumSolutions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(args, " "), "--num-solutions") {
+		t.Fatalf("single solution should use the solver default: %v", args)
 	}
 }
 

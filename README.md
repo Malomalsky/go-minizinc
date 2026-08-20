@@ -194,6 +194,10 @@ for _, result := range results {
 }
 ```
 
+Enumeration requires solver support for MiniZinc's `-a` flag. Limiting a solve
+to more than one result requires `-n` support; unsupported combinations return
+an error before the process starts.
+
 `SolveStream` emits solutions as MiniZinc produces them. Stream failures are
 returned through `Result.Error`:
 
@@ -221,7 +225,8 @@ the same model when solves must run in parallel.
 models, use `Get`, `GetInt`, `GetFloat`, `GetBool`, `GetString`, or `GetArray`.
 
 Native MiniZinc JSON output is enabled by default. `Result.Solution` contains
-the decoded variables. Models with custom output sections can also use:
+the decoded variables and `_objective` for optimization models. Models with
+custom output sections can also use:
 
 - `Result.Section(name)` for string-valued sections
 - `Result.Output` for raw output values
