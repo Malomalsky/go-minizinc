@@ -25,14 +25,21 @@ type Model struct {
 	requiredParams []string // populated by Builder.Build; checked at solve time
 }
 
-// NewModel returns an empty Model.
-func NewModel() *Model {
+func NewModel(code ...string) *Model {
 	return &Model{
-		codeFragments: make([]string, 0),
+		codeFragments: append([]string(nil), code...),
 		dataFiles:     make([]string, 0),
 		parameters:    make(map[string]any),
 		assigned:      make(map[string]bool),
 	}
+}
+
+func LoadModel(path string) (*Model, error) {
+	model := NewModel()
+	if err := model.AddFile(path); err != nil {
+		return nil, err
+	}
+	return model, nil
 }
 
 // AddString appends a MiniZinc code fragment to the model.

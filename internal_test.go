@@ -13,6 +13,28 @@ import (
 	"time"
 )
 
+func TestNewModelAcceptsFragments(t *testing.T) {
+	model := NewModel("int: n;", "solve satisfy;")
+	if got := model.getCode(); got != "int: n;\nsolve satisfy;\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLoadModel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "model.mzn")
+	if err := os.WriteFile(path, []byte("solve satisfy;"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := LoadModel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.getCode() != "solve satisfy;\n" {
+		t.Fatalf("got %q", model.getCode())
+	}
+}
+
 func TestModelCopy_TypedSlice(t *testing.T) {
 	orig := NewModel()
 	if err := orig.SetParam("xs", []int{1, 2, 3}); err != nil {
