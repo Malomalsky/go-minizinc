@@ -2,6 +2,8 @@ package minizinc
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -234,6 +236,60 @@ func TestSolveScopedParams(t *testing.T) {
 	}
 	if count != 3 {
 		t.Fatalf("got %d streamed solutions", count)
+	}
+}
+
+func TestMiniZincValues(t *testing.T) {
+	solver, err := FindSolver("gecode")
+	if err != nil {
+		t.Skipf("solver not found: %v", err)
+	}
+
+	model := NewModel(`
+		set of int: allowed;
+		enum Country = {Canada, England};
+		Country: requested_country;
+		enum Node = Left(1..2) ++ Right(1..2);
+		Node: requested_node;
+		var set of 1..6: selected;
+		var Country: country;
+		var Node: node;
+		constraint selected = allowed;
+		constraint country = requested_country;
+		constraint node = requested_node;
+		solve satisfy;
+	`)
+	instance, err := NewInstance(model, solver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantSet := Set[int]{Elements: []int{5}, Ranges: []SetRange[int]{{Min: 1, Max: 3}}}
+	result, err := instance.Solve(context.Background(), WithParams(Params{
+		"allowed":           wantSet,
+		"requested_country": Enum{Value: "England"},
+		"requested_node":    Enum{Constructor: "Right", Argument: 2},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var solution struct {
+		Selected Set[int] `json:"selected"`
+		Country  Enum     `json:"country"`
+		Node     Enum     `json:"node"`
+	}
+	if err := result.Decode(&solution); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(solution.Selected, wantSet) {
+		t.Fatalf("set got %+v", solution.Selected)
+	}
+	if solution.Country != (Enum{Value: "England"}) {
+		t.Fatalf("country got %+v", solution.Country)
+	}
+	if solution.Node.Constructor != "Right" || solution.Node.Argument != json.Number("2") {
+		t.Fatalf("node got %+v", solution.Node)
 	}
 }
 
