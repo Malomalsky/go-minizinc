@@ -115,8 +115,10 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 	var finalStats Statistics
 	var hasStats bool
 	var solutionCount int
+	var diagnostics solveDiagnostics
 
 	for _, msg := range messages {
+		diagnostics.add(msg)
 		switch msg.Type {
 		case "solution":
 			result, err := parseStreamMessage(msg)
@@ -146,6 +148,7 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 		if options.TimeLimit > 0 && result.Status == StatusUnknown {
 			result.HitTimeLimit = true
 		}
+		diagnostics.attach(result)
 		return result, nil
 	}
 
@@ -156,6 +159,7 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 		lastResult.Statistics = cloneStatistics(finalStats)
 	}
 	lastResult.HitTimeLimit = hitTimeLimit(options, finalStatus, solutionCount, analyzeModel(inst.model).SolveType)
+	diagnostics.attach(lastResult)
 	return lastResult, nil
 }
 
@@ -194,8 +198,10 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	var finalStatus = StatusUnknown
 	var finalStats Statistics
 	var hasStats bool
+	var diagnostics solveDiagnostics
 
 	for _, msg := range messages {
+		diagnostics.add(msg)
 		switch msg.Type {
 		case "solution":
 			result, err := parseStreamMessage(msg)
@@ -229,7 +235,7 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	// Empty result with a known terminal status (UNSAT / UNBOUNDED) or a
 	// timeout deserves a synthetic Result so callers do not see an
 	// indistinguishable "no solutions" slice.
-	if len(results) == 0 && (finalStatus != StatusUnknown || options.TimeLimit > 0) {
+	if len(results) == 0 && (finalStatus != StatusUnknown || options.TimeLimit > 0 || diagnostics.hasMessages()) {
 		r := &Result{
 			Status:   finalStatus,
 			Solution: make(map[string]any),
@@ -241,6 +247,9 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 			r.HitTimeLimit = true
 		}
 		results = append(results, r)
+	}
+	if len(results) > 0 {
+		diagnostics.attach(results[len(results)-1])
 	}
 
 	return results, nil
@@ -295,6 +304,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 		var hasStats bool
 		var pending *Result
 		var solutionCount int
+		var diagnostics solveDiagnostics
 
 		flush := func() error {
 			if pending == nil {
@@ -315,6 +325,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 		}
 
 		err = inst.driver.runJSONStream(ctx, args, cfg, func(msg streamMessage) error {
+			diagnostics.add(msg)
 			switch msg.Type {
 			case "statistics":
 				if stats, ok := parseStatisticsFromMessage(msg); ok {
@@ -341,8 +352,10 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			if ctx.Err() != nil {
 				return
 			}
+			result := &Result{Status: StatusError, Error: err}
+			diagnostics.attach(result)
 			select {
-			case ch <- &Result{Status: StatusError, Error: err}:
+			case ch <- result:
 			case <-ctx.Done():
 			}
 			return
@@ -357,6 +370,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			}
 			pending.IsIntermediate = false
 			pending.HitTimeLimit = hitTimeLimit(options, finalStatus, solutionCount, analyzeModel(inst.model).SolveType)
+			diagnostics.attach(pending)
 			select {
 			case ch <- pending:
 			case <-ctx.Done():
@@ -368,7 +382,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 		// (e.g. UNSATISFIABLE, UNBOUNDED, or UNKNOWN-after-time-limit).
 		// Emit a synthetic empty Result so the consumer learns the outcome
 		// instead of seeing the channel close without explanation.
-		if finalStatus != StatusUnknown || options.TimeLimit > 0 {
+		if finalStatus != StatusUnknown || options.TimeLimit > 0 || diagnostics.hasMessages() {
 			r := &Result{
 				Status:   finalStatus,
 				Solution: make(map[string]any),
@@ -379,6 +393,7 @@ func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-ch
 			if options.TimeLimit > 0 && r.Status == StatusUnknown {
 				r.HitTimeLimit = true
 			}
+			diagnostics.attach(r)
 			select {
 			case ch <- r:
 			case <-ctx.Done():

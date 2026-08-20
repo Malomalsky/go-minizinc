@@ -26,14 +26,16 @@ import (
 // section name. The default "dzn" section is consumed to populate Solution
 // and is NOT duplicated here.
 type Result struct {
-	Status         Status
-	Solution       map[string]any
-	Statistics     Statistics
-	Error          error
-	IsIntermediate bool
-	Sections       map[string]string
-	Output         map[string]any
-	SectionOrder   []string
+	Status          Status
+	Solution        map[string]any
+	Statistics      Statistics
+	Error           error
+	IsIntermediate  bool
+	Sections        map[string]string
+	Output          map[string]any
+	SectionOrder    []string
+	Warnings        []Warning
+	CheckerMessages []CheckerMessage
 
 	HitTimeLimit bool
 }
@@ -328,6 +330,59 @@ func mergeStatistics(current, next Statistics) Statistics {
 func cloneStatistics(stats Statistics) Statistics {
 	stats.Raw = maps.Clone(stats.Raw)
 	return stats
+}
+
+type solveDiagnostics struct {
+	warnings []Warning
+	checker  []CheckerMessage
+}
+
+func (d *solveDiagnostics) add(message streamMessage) {
+	switch message.Type {
+	case "warning":
+		d.warnings = append(d.warnings, Warning{
+			Message:  message.Message,
+			Location: deepCopyValue(message.Location),
+			Stack:    cloneAnySlice(message.Stack),
+		})
+	case "checker":
+		for _, nested := range message.Messages {
+			d.checker = append(d.checker, CheckerMessage{
+				Type:         nested.Type,
+				Status:       nested.Status,
+				Output:       cloneAnyMap(nested.Output),
+				SectionOrder: append([]string(nil), nested.Sections...),
+				Statistics:   cloneAnyMap(nested.Statistics),
+				What:         nested.What,
+				Message:      nested.Message,
+				Location:     deepCopyValue(nested.Location),
+				Stack:        cloneAnySlice(nested.Stack),
+			})
+		}
+	}
+}
+
+func (d *solveDiagnostics) attach(result *Result) {
+	result.Warnings = append([]Warning(nil), d.warnings...)
+	result.CheckerMessages = append([]CheckerMessage(nil), d.checker...)
+}
+
+func (d *solveDiagnostics) hasMessages() bool {
+	return len(d.warnings) > 0 || len(d.checker) > 0
+}
+
+func cloneAnyMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	return deepCopyValue(value).(map[string]any)
+}
+
+func cloneAnySlice(value []any) []any {
+	if value == nil {
+		return nil
+	}
+	return deepCopyValue(value).([]any)
 }
 
 func numberToFloat64(v any) (float64, bool) {

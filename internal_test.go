@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -739,5 +740,208 @@ func TestWithCommandHook_StoresHook(t *testing.T) {
 	o.CommandHook([]string{"a", "b"})
 	if len(captured) != 2 {
 		t.Fatalf("hook not invoked: %v", captured)
+	}
+}
+
+func TestSolveMethodsAttachDiagnostics(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
+
+	for _, withSolution := range []bool{true, false} {
+		t.Run(map[bool]string{true: "solution", false: "no_solution"}[withSolution], func(t *testing.T) {
+			instance := newDiagnosticFixtureInstance(t, withSolution)
+
+			result, err := instance.Solve(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertDiagnostics(t, result)
+
+			results, err := instance.SolveAll(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantResults := 1
+			if withSolution {
+				wantResults = 2
+			}
+			if len(results) != wantResults {
+				t.Fatalf("SolveAll returned %d results", len(results))
+			}
+			for _, result := range results[:len(results)-1] {
+				assertNoDiagnostics(t, result)
+			}
+			assertDiagnostics(t, results[len(results)-1])
+
+			var streamed []*Result
+			for result := range instance.SolveStream(context.Background()) {
+				if result.Error != nil {
+					t.Fatal(result.Error)
+				}
+				streamed = append(streamed, result)
+			}
+			if len(streamed) != wantResults {
+				t.Fatalf("SolveStream returned %d results", len(streamed))
+			}
+			for _, result := range streamed[:len(streamed)-1] {
+				if !result.IsIntermediate {
+					t.Fatal("intermediate result marked terminal")
+				}
+				assertNoDiagnostics(t, result)
+			}
+			if streamed[len(streamed)-1].IsIntermediate {
+				t.Fatal("terminal result marked intermediate")
+			}
+			assertDiagnostics(t, streamed[len(streamed)-1])
+		})
+	}
+}
+
+func TestSolveDiagnosticsCopiesPayloads(t *testing.T) {
+	warningLocation := map[string]any{"filename": "before.mzn"}
+	warningFrame := map[string]any{"description": "before"}
+	checkerOutput := map[string]any{"nested": map[string]any{"value": "before"}}
+	checkerStats := map[string]any{"checks": json.Number("1")}
+	checkerLocation := map[string]any{"filename": "checker.mzn"}
+	checkerFrame := map[string]any{"description": "checker"}
+
+	var diagnostics solveDiagnostics
+	diagnostics.add(streamMessage{
+		Type:     "warning",
+		Message:  "careful",
+		Location: warningLocation,
+		Stack:    []any{warningFrame},
+	})
+	diagnostics.add(streamMessage{
+		Type: "checker",
+		Messages: []streamMessage{{
+			Type:       "warning",
+			Output:     checkerOutput,
+			Sections:   []string{"default"},
+			Statistics: checkerStats,
+			What:       "checker warning",
+			Message:    "checked",
+			Location:   checkerLocation,
+			Stack:      []any{checkerFrame},
+		}},
+	})
+
+	warningLocation["filename"] = "after.mzn"
+	warningFrame["description"] = "after"
+	checkerOutput["nested"].(map[string]any)["value"] = "after"
+	checkerStats["checks"] = json.Number("2")
+	checkerLocation["filename"] = "after.mzn"
+	checkerFrame["description"] = "after"
+
+	result := &Result{}
+	diagnostics.attach(result)
+	assertDiagnostics(t, result)
+}
+
+func TestSolveStreamAttachesDiagnosticsToError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
+	instance := newJSONFixtureInstance(t, []string{
+		`{"type":"warning","message":"before failure"}`,
+		`{`,
+	})
+	var results []*Result
+	for result := range instance.SolveStream(context.Background()) {
+		results = append(results, result)
+	}
+	if len(results) != 1 || results[0].Error == nil {
+		t.Fatalf("got %+v", results)
+	}
+	if len(results[0].Warnings) != 1 || results[0].Warnings[0].Message != "before failure" {
+		t.Fatalf("warnings got %+v", results[0].Warnings)
+	}
+}
+
+func newDiagnosticFixtureInstance(t *testing.T, withSolution bool) *Instance {
+	t.Helper()
+	messages := []string{
+		`{"type":"warning","message":"careful","location":{"filename":"before.mzn"},"stack":[{"description":"before"}]}`,
+		`{"type":"checker","messages":[{"type":"warning","output":{"nested":{"value":"before"}},"sections":["default"],"statistics":{"checks":1},"what":"checker warning","message":"checked","location":{"filename":"checker.mzn"},"stack":[{"description":"checker"}]}]}`,
+	}
+	if withSolution {
+		messages = append(messages,
+			`{"type":"solution","output":{"json":{"x":1}},"sections":["json"]}`,
+			`{"type":"solution","output":{"json":{"x":1}},"sections":["json"]}`,
+			`{"type":"status","status":"ALL_SOLUTIONS"}`,
+		)
+	}
+	return newJSONFixtureInstance(t, messages)
+}
+
+func newJSONFixtureInstance(t *testing.T, messages []string) *Instance {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "minizinc-fixture")
+	script := "#!/bin/sh\ncat <<'EOF'\n" + strings.Join(messages, "\n") + "\nEOF\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	driver := &Driver{
+		executable: path,
+		version:    &Version{Major: 2, Minor: 10},
+	}
+	solver := &Solver{
+		ID:       "fixture",
+		Name:     "fixture",
+		StdFlags: []string{"-a", "-n"},
+		driver:   driver,
+	}
+	instance, err := NewInstance(NewModel("var 1..1: x; solve satisfy;"), solver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return instance
+}
+
+func assertNoDiagnostics(t *testing.T, result *Result) {
+	t.Helper()
+	if len(result.Warnings) != 0 || len(result.CheckerMessages) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v %+v", result.Warnings, result.CheckerMessages)
+	}
+}
+
+func assertDiagnostics(t *testing.T, result *Result) {
+	t.Helper()
+	if len(result.Warnings) != 1 {
+		t.Fatalf("got %d warnings", len(result.Warnings))
+	}
+	warning := result.Warnings[0]
+	if warning.Message != "careful" {
+		t.Fatalf("warning got %+v", warning)
+	}
+	if warning.Location.(map[string]any)["filename"] != "before.mzn" {
+		t.Fatalf("warning location got %+v", warning.Location)
+	}
+	if warning.Stack[0].(map[string]any)["description"] != "before" {
+		t.Fatalf("warning stack got %+v", warning.Stack)
+	}
+
+	if len(result.CheckerMessages) != 1 {
+		t.Fatalf("got %d checker messages", len(result.CheckerMessages))
+	}
+	checker := result.CheckerMessages[0]
+	if checker.Type != "warning" || checker.What != "checker warning" || checker.Message != "checked" {
+		t.Fatalf("checker got %+v", checker)
+	}
+	if !reflect.DeepEqual(checker.SectionOrder, []string{"default"}) {
+		t.Fatalf("checker sections got %v", checker.SectionOrder)
+	}
+	if checker.Output["nested"].(map[string]any)["value"] != "before" {
+		t.Fatalf("checker output got %+v", checker.Output)
+	}
+	if checker.Statistics["checks"] != json.Number("1") {
+		t.Fatalf("checker statistics got %+v", checker.Statistics)
+	}
+	if checker.Location.(map[string]any)["filename"] != "checker.mzn" {
+		t.Fatalf("checker location got %+v", checker.Location)
+	}
+	if checker.Stack[0].(map[string]any)["description"] != "checker" {
+		t.Fatalf("checker stack got %+v", checker.Stack)
 	}
 }
