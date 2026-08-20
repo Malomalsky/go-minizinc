@@ -114,9 +114,10 @@ jobs:
           minizinc --solvers | grep -i coin-bc
       - name: Run required integrations
         run: |
-          output="$(go test -count=1 -v -run '^(TestDriver|TestFindSolver|TestListSolvers|TestSimpleSolve|TestSolveWithParams|TestSolveScopedParams|TestMiniZincValues|TestSolveAll|TestSolveStream|TestGecodeSolverOptions|TestCoinBCSolverOptions)$' .)"
-          printf '%s\n' "$output"
-          if grep -q -- '--- SKIP' <<<"$output"; then
+          set -o pipefail
+          log="$RUNNER_TEMP/integration.log"
+          go test -count=1 -v -run '^(TestDriver|TestFindSolver|TestListSolvers|TestSimpleSolve|TestSolveWithParams|TestSolveScopedParams|TestMiniZincValues|TestSolveAll|TestSolveStream|TestGecodeSolverOptions|TestCoinBCSolverOptions)$' . | tee "$log"
+          if grep -q -- '--- SKIP' "$log"; then
             exit 1
           fi
       - run: go test -count=1 ./...
