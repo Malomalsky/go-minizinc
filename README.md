@@ -130,21 +130,26 @@ MiniZinc sets and enum values use their native JSON representation:
 
 ```go
 result, err := instance.Solve(ctx, minizinc.WithParams(minizinc.Params{
-	"allowed":           minizinc.Set[int]{
+	"allowed": minizinc.Set[int]{
 		Elements: []int{5},
 		Ranges:   []minizinc.SetRange[int]{{Min: 1, Max: 3}},
 	},
-	"requested_country": minizinc.Enum{Value: "England"},
-	"requested_node":    minizinc.Enum{Constructor: "Right", Argument: 2},
+	"requested_country":         minizinc.Enum{Value: "England"},
+	"requested_wrapped_country": minizinc.Enum{
+		Constructor: "C",
+		Argument:    minizinc.Enum{Value: "Canada"},
+	},
+	"requested_slot": minizinc.AnonymousEnum("Slot", 2),
 }))
 if err != nil {
 	log.Fatal(err)
 }
 
 var solution struct {
-	Selected minizinc.Set[int] `json:"selected"`
-	Country  minizinc.Enum     `json:"country"`
-	Node     minizinc.Enum     `json:"node"`
+	Selected       minizinc.Set[int] `json:"selected"`
+	Country        minizinc.Enum     `json:"country"`
+	WrappedCountry minizinc.Enum     `json:"wrapped_country"`
+	Slot           minizinc.Enum     `json:"slot"`
 }
 if err := result.Decode(&solution); err != nil {
 	log.Fatal(err)
@@ -152,7 +157,9 @@ if err := result.Decode(&solution); err != nil {
 ```
 
 `Set[T]` supports individual elements and inclusive ranges. `Enum` supports
-named values, nested constructors, and integer constructor arguments.
+named values and constructor values. Use `AnonymousEnum` for values created by
+MiniZinc's `anon_enum`. Integer constructor arguments require support from the
+installed MiniZinc version and are covered by the MiniZinc 2.10 integration.
 
 ## Solver Selection
 

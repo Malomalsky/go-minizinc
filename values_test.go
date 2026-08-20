@@ -65,6 +65,7 @@ func TestEnumJSON(t *testing.T) {
 		json  string
 	}{
 		{name: "value", value: Enum{Value: "Canada"}, json: `{"e":"Canada"}`},
+		{name: "anonymous", value: AnonymousEnum("Slot", 2), json: `{"e":"Slot","i":2}`},
 		{name: "nested", value: Enum{Constructor: "C", Argument: Enum{Value: "Canada"}}, json: `{"c":"C","e":{"e":"Canada"}}`},
 		{name: "integer", value: Enum{Constructor: "Right", Argument: 2}, json: `{"c":"Right","e":2}`},
 	}
@@ -92,16 +93,33 @@ func TestEnumJSON(t *testing.T) {
 	}
 }
 
+func TestEnumJSONDecodesLegacyConstructor(t *testing.T) {
+	var value Enum
+	if err := json.Unmarshal([]byte(`{"c":"C","e":"Canada"}`), &value); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"c":"C","e":{"e":"Canada"}}` {
+		t.Fatalf("got %s", data)
+	}
+}
+
 func TestEnumJSONRejectsMalformedValues(t *testing.T) {
 	values := []string{
 		`null`,
 		`{}`,
 		`{"e":""}`,
 		`{"e":2}`,
+		`{"e":"Slot","i":null}`,
+		`{"e":"Slot","i":1.5}`,
+		`{"e":"Slot","i":"2"}`,
+		`{"e":"Slot","i":2,"extra":true}`,
 		`{"c":"C"}`,
 		`{"c":"","e":2}`,
 		`{"c":"C","e":null}`,
-		`{"c":"C","e":"Canada"}`,
 		`{"c":"C","e":[]}`,
 		`{"c":"C","e":{}}`,
 		`{"e":"Canada","extra":true}`,
@@ -124,6 +142,8 @@ func TestEnumJSONRejectsInvalidGoValues(t *testing.T) {
 		{Value: "Canada", Constructor: "C", Argument: 1},
 		{Constructor: "C"},
 		{Constructor: "C", Argument: argument},
+		{Value: "Slot", Constructor: "C", Index: new(int)},
+		{Value: "Slot", Argument: 1, Index: new(int)},
 	}
 	for _, value := range values {
 		if _, err := json.Marshal(value); err == nil {

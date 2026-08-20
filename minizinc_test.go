@@ -249,14 +249,18 @@ func TestMiniZincValues(t *testing.T) {
 		set of int: allowed;
 		enum Country = {Canada, England};
 		Country: requested_country;
-		enum Node = Left(1..2) ++ Right(1..2);
-		Node: requested_node;
+		enum WrappedCountry = C(Country) ++ {None};
+		WrappedCountry: requested_wrapped_country;
+		enum Slot = anon_enum(3);
+		Slot: requested_slot;
 		var set of 1..6: selected;
 		var Country: country;
-		var Node: node;
+		var WrappedCountry: wrapped_country;
+		var Slot: slot;
 		constraint selected = allowed;
 		constraint country = requested_country;
-		constraint node = requested_node;
+		constraint wrapped_country = requested_wrapped_country;
+		constraint slot = requested_slot;
 		solve satisfy;
 	`)
 	instance, err := NewInstance(model, solver)
@@ -266,18 +270,20 @@ func TestMiniZincValues(t *testing.T) {
 
 	wantSet := Set[int]{Elements: []int{5}, Ranges: []SetRange[int]{{Min: 1, Max: 3}}}
 	result, err := instance.Solve(context.Background(), WithParams(Params{
-		"allowed":           wantSet,
-		"requested_country": Enum{Value: "England"},
-		"requested_node":    Enum{Constructor: "Right", Argument: 2},
+		"allowed":                   wantSet,
+		"requested_country":         Enum{Value: "England"},
+		"requested_wrapped_country": Enum{Constructor: "C", Argument: Enum{Value: "Canada"}},
+		"requested_slot":            AnonymousEnum("Slot", 2),
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var solution struct {
-		Selected Set[int] `json:"selected"`
-		Country  Enum     `json:"country"`
-		Node     Enum     `json:"node"`
+		Selected       Set[int] `json:"selected"`
+		Country        Enum     `json:"country"`
+		WrappedCountry Enum     `json:"wrapped_country"`
+		Slot           Enum     `json:"slot"`
 	}
 	if err := result.Decode(&solution); err != nil {
 		t.Fatal(err)
@@ -287,6 +293,47 @@ func TestMiniZincValues(t *testing.T) {
 	}
 	if solution.Country != (Enum{Value: "England"}) {
 		t.Fatalf("country got %+v", solution.Country)
+	}
+	wantWrapped := Enum{Constructor: "C", Argument: Enum{Value: "Canada"}}
+	if !reflect.DeepEqual(solution.WrappedCountry, wantWrapped) {
+		t.Fatalf("wrapped country got %+v", solution.WrappedCountry)
+	}
+	wantSlot := AnonymousEnum("Slot", 2)
+	if !reflect.DeepEqual(solution.Slot, wantSlot) {
+		t.Fatalf("slot got %+v", solution.Slot)
+	}
+}
+
+func TestMiniZincIntegerEnumConstructor(t *testing.T) {
+	solver, err := FindSolver("gecode")
+	if err != nil {
+		t.Skipf("solver not found: %v", err)
+	}
+	if !solver.driver.Version().AtLeast(2, 10, 0) {
+		t.Skip("integer enum constructors require a newer MiniZinc release")
+	}
+	model := NewModel(`
+		enum Node = Left(1..2) ++ Right(1..2);
+		Node: requested_node;
+		var Node: node;
+		constraint node = requested_node;
+		solve satisfy;
+	`)
+	instance, err := NewInstance(model, solver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := instance.Solve(context.Background(), WithParams(Params{
+		"requested_node": Enum{Constructor: "Right", Argument: 2},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var solution struct {
+		Node Enum `json:"node"`
+	}
+	if err := result.Decode(&solution); err != nil {
+		t.Fatal(err)
 	}
 	if solution.Node.Constructor != "Right" || solution.Node.Argument != json.Number("2") {
 		t.Fatalf("node got %+v", solution.Node)

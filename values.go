@@ -86,20 +86,31 @@ type Enum struct {
 	Value       string
 	Constructor string
 	Argument    any
+	Index       *int
+}
+
+func AnonymousEnum(name string, index int) Enum {
+	return Enum{Value: name, Index: &index}
 }
 
 func (e Enum) MarshalJSON() ([]byte, error) {
-	if e.Value != "" && e.Constructor == "" && e.Argument == nil {
+	if e.Value != "" && e.Constructor == "" && e.Argument == nil && e.Index == nil {
 		return json.Marshal(struct {
 			Value string `json:"e"`
 		}{Value: e.Value})
 	}
-	if e.Value == "" && e.Constructor != "" && e.Argument != nil {
+	if e.Value != "" && e.Constructor == "" && e.Argument == nil && e.Index != nil {
+		return json.Marshal(struct {
+			Value string `json:"e"`
+			Index int    `json:"i"`
+		}{Value: e.Value, Index: *e.Index})
+	}
+	if e.Value == "" && e.Constructor != "" && e.Argument != nil && e.Index == nil {
 		argument, err := json.Marshal(e.Argument)
 		if err != nil {
 			return nil, wrapError("invalid MiniZinc enum constructor argument", err)
 		}
-		if _, err := decodeEnumArgument(argument); err != nil {
+		if _, err := decodeEnumArgument(argument, false); err != nil {
 			return nil, err
 		}
 		return json.Marshal(struct {
@@ -121,8 +132,24 @@ func (e *Enum) UnmarshalJSON(data []byte) error {
 	}
 	argument, hasArgument := object["e"]
 	constructor, hasConstructor := object["c"]
+	index, hasIndex := object["i"]
 	if !hasArgument {
 		return newError("invalid MiniZinc enum")
+	}
+	if hasIndex {
+		if hasConstructor || len(object) != 2 {
+			return newError("invalid MiniZinc enum")
+		}
+		var value string
+		if err := json.Unmarshal(argument, &value); err != nil || value == "" {
+			return newError("invalid MiniZinc enum value")
+		}
+		var ordinal *int
+		if err := json.Unmarshal(index, &ordinal); err != nil || ordinal == nil {
+			return newError("invalid MiniZinc enum index")
+		}
+		*e = Enum{Value: value, Index: ordinal}
+		return nil
 	}
 	if !hasConstructor {
 		if len(object) != 1 {
@@ -143,7 +170,7 @@ func (e *Enum) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(constructor, &name); err != nil || name == "" {
 		return newError("invalid MiniZinc enum constructor")
 	}
-	value, err := decodeEnumArgument(argument)
+	value, err := decodeEnumArgument(argument, true)
 	if err != nil {
 		return err
 	}
@@ -151,7 +178,7 @@ func (e *Enum) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func decodeEnumArgument(data []byte) (any, error) {
+func decodeEnumArgument(data []byte, allowLegacyString bool) (any, error) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) > 0 && trimmed[0] == '{' {
 		var nested Enum
@@ -170,12 +197,16 @@ func decodeEnumArgument(data []byte) (any, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return nil, newError("invalid MiniZinc enum constructor argument")
 	}
-	number, ok := value.(json.Number)
-	if !ok {
-		return nil, newError("invalid MiniZinc enum constructor argument")
+	switch value := value.(type) {
+	case json.Number:
+		if _, err := value.Int64(); err != nil {
+			return nil, wrapError("invalid MiniZinc enum constructor argument", err)
+		}
+		return value, nil
+	case string:
+		if allowLegacyString && value != "" {
+			return Enum{Value: value}, nil
+		}
 	}
-	if _, err := number.Int64(); err != nil {
-		return nil, wrapError("invalid MiniZinc enum constructor argument", err)
-	}
-	return number, nil
+	return nil, newError("invalid MiniZinc enum constructor argument")
 }
