@@ -96,6 +96,10 @@ jobs:
         with:
           go-version: stable
           cache: false
+      - name: Install MiniZinc runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libqt5printsupport5
       - name: Install MiniZinc
         env:
           MINIZINC_VERSION: ${{ matrix.version }}
