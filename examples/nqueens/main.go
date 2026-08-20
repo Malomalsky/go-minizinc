@@ -10,8 +10,7 @@ import (
 )
 
 func main() {
-	model := minizinc.NewModel()
-	model.AddString(`
+	model := minizinc.NewModel(`
 		int: n;
 		array[1..n] of var 1..n: queens;
 
@@ -33,14 +32,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := instance.SetParam("n", 8); err != nil {
-		log.Fatal(err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	result, err := instance.Solve(ctx)
+	result, err := instance.Solve(ctx, minizinc.WithParams(minizinc.Params{"n": 8}))
 	if err != nil {
 		log.Fatal(err)
 	}

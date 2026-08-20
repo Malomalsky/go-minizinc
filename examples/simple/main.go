@@ -15,8 +15,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	model := minizinc.NewModel()
-	model.AddString("var 1..10: x; solve maximize x;")
+	model := minizinc.NewModel("var 1..10: x; solve maximize x;")
 
 	instance, err := minizinc.NewInstance(model, solver)
 	if err != nil {

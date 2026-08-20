@@ -10,8 +10,7 @@ import (
 )
 
 func main() {
-	model := minizinc.NewModel()
-	model.AddString(`
+	model := minizinc.NewModel(`
 		int: n;
 		array[1..n] of var 1..n: x;
 		constraint forall(i, j in 1..n where i < j)(x[i] != x[j]);
@@ -23,10 +22,6 @@ func main() {
 
 	instance, err := minizinc.NewInstanceAuto(model)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := instance.SetParam("n", 5); err != nil {
 		log.Fatal(err)
 	}
 
@@ -50,7 +45,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := instance.Solve(ctx)
+	result, err := instance.Solve(ctx, minizinc.WithParams(minizinc.Params{"n": 5}))
 	if err != nil {
 		log.Fatal(err)
 	}

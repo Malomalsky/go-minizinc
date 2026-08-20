@@ -1,17 +1,26 @@
 # go-minizinc
 
-Go bindings for MiniZinc constraint solver.
+<p align="center">
+  <img src="docs/assets/go-minizinc-logo.png" alt="go-minizinc: Go bindings for MiniZinc" width="720">
+</p>
 
-## Installation
+Go bindings for the [MiniZinc](https://www.minizinc.org/) command-line tool.
+Build or load a model, provide data for each solve, choose an installed solver,
+and decode solutions into Go values.
+
+## Requirements
+
+- Go 1.21 or newer
+- MiniZinc 2.6 or newer
+- The `minizinc` executable on `PATH`, or an explicit path passed to `NewDriver`
+
+Install MiniZinc from the
+[official downloads page](https://www.minizinc.org/software.html), then add the
+module:
 
 ```bash
 go get github.com/Malomalsky/go-minizinc
 ```
-
-## Requirements
-
-- Go 1.21 or higher
-- MiniZinc 2.6.0 or higher, available in PATH or passed to `NewDriver`
 
 ## Quick Start
 
@@ -19,431 +28,303 @@ go get github.com/Malomalsky/go-minizinc
 package main
 
 import (
-    "context"
-    "fmt"
-    "log"
-    "time"
+	"context"
+	"fmt"
+	"log"
+	"time"
 
-    "github.com/Malomalsky/go-minizinc"
+	"github.com/Malomalsky/go-minizinc"
 )
 
 func main() {
-    solver, err := minizinc.FindSolver("coin-bc")
-    if err != nil {
-        log.Fatal(err)
-    }
+	model := minizinc.NewModel(`
+		int: n;
+		var 1..n: x;
+		solve maximize x;
+	`)
 
-    model := minizinc.NewModel()
-    model.AddString("var 1..10: x; solve maximize x;")
-
-    instance, err := minizinc.NewInstance(model, solver)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
-
-    result, err := instance.Solve(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-	x, err := result.GetInt("x")
+	instance, err := minizinc.NewInstanceAuto(model)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("x = %d\n", x)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := instance.Solve(ctx,
+		minizinc.WithParams(minizinc.Params{"n": 10}),
+		minizinc.WithTimeLimit(5*time.Second),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var solution struct {
+		X int `json:"x"`
+	}
+	if err := result.Decode(&solution); err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("status=%s x=%d\n", result.Status, solution.X)
 }
 ```
 
-## Features
+`NewInstanceAuto` selects from the solvers reported by the installed MiniZinc
+distribution. Use an explicit solver when reproducibility matters.
 
-- Full MiniZinc functionality via CLI integration
-- Go-idiomatic API with context support
-- **Smart solver selection** based on model analysis
-- Streaming solutions via channels
-- Type-safe result access
-- Functional options pattern
-- Thread-safe operations
-- Model analysis and capability detection
+## Models and Data
 
-## Usage
-
-### Creating Models
+Pass MiniZinc source directly to `NewModel`:
 
 ```go
-model := minizinc.NewModel()
-
-model.AddString(`
-    int: n;
-    array[1..n] of var 1..n: queens;
-    constraint alldifferent(queens);
-    solve satisfy;
-`)
-
-if err := model.AddFile("model.mzn"); err != nil {
-    log.Fatal(err)
-}
+model := minizinc.NewModel(
+	"int: n;",
+	"array[1..n] of var 1..n: x;",
+	"solve satisfy;",
+)
 ```
 
-### Setting Parameters
+Load an existing model and attach MiniZinc data files:
 
 ```go
-instance, err := minizinc.NewInstance(model, solver)
+model, err := minizinc.LoadModel("models/schedule.mzn")
 if err != nil {
-    log.Fatal(err)
+	log.Fatal(err)
 }
-if err := instance.SetParam("n", 8); err != nil {
-    log.Fatal(err)
-}
-if err := instance.SetParam("values", []int{1, 2, 3}); err != nil {
-    log.Fatal(err)
+if err := model.AddFile("data/instance.dzn"); err != nil {
+	log.Fatal(err)
 }
 ```
 
-### Finding Solvers
+`AddString` appends source fragments. `AddFile` accepts `.mzn`, `.dzn`, and
+`.json` files. Relative includes in a loaded `.mzn` file are resolved from that
+file's directory.
 
-**Manual selection:**
+Use `WithParams` for values that change between solves:
+
 ```go
-solver, err := minizinc.FindSolver("coin-bc")
+for _, n := range []int{8, 16, 32} {
+	result, err := instance.Solve(ctx,
+		minizinc.WithParams(minizinc.Params{"n": n}),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("n=%d solution=%v\n", n, result.Solution)
+}
 ```
 
-**Automatic selection:**
+Solve-scoped parameters are copied before MiniZinc starts and do not mutate the
+instance. They override defaults set with `Model.SetParam` or
+`Instance.SetParam` for that call. Parameter values must be JSON-serializable.
+
+Builder-declared parameters are checked before a subprocess starts. Missing
+values are returned as `*minizinc.MissingParamsError`.
+
+## Solver Selection
+
+Automatic selection uses the model text and installed solver metadata:
+
 ```go
 instance, err := minizinc.NewInstanceAuto(model)
+if err != nil {
+	log.Fatal(err)
+}
 ```
 
-**Custom MiniZinc binary:**
+Select a solver by ID, name, or tag when the choice is part of application
+behavior:
+
+```go
+solver, err := minizinc.FindSolver("gecode")
+if err != nil {
+	log.Fatal(err)
+}
+instance, err := minizinc.NewInstance(model, solver)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+Use a non-default MiniZinc executable through a `Driver`:
+
 ```go
 driver, err := minizinc.NewDriver("/opt/minizinc/bin/minizinc")
-solver, err := minizinc.FindSolverForModelWithDriver(model, driver)
-instance, err := minizinc.NewInstance(model, solver)
-```
-
-**With warnings:**
-```go
-solver, warnings, err := minizinc.FindSolverForModelWithWarnings(model)
-for _, w := range warnings {
-    log.Printf("Warning: %s", w)
-}
-```
-
-**List all solvers:**
-```go
-solvers, err := minizinc.ListSolvers()
-for _, s := range solvers {
-    fmt.Printf("%s: %s\n", s.Name, s.Version)
-}
-```
-
-**Advanced filtering:**
-```go
-filter := minizinc.SolverFilter{
-    RequiredTags: []string{"mip"},
-    PreferredTags: []string{"coin-bc"},
-    ExcludedTags: []string{"sat"},
-}
-solver, err := minizinc.FindBestSolver(filter)
-```
-
-### Solving
-
-```go
-result, err := instance.Solve(ctx)
 if err != nil {
-    log.Fatal(err)
+	log.Fatal(err)
 }
-
-x, err := result.GetInt("x")
-y, err := result.GetFloat("y")
-arr, err := result.GetArray("array")
-```
-
-### Decoding into Structs
-
-```go
-var out struct {
-    X      int   `json:"x"`
-    Queens []int `json:"queens"`
+solver, err := minizinc.FindSolverForModelWithDriver(model, driver)
+if err != nil {
+	log.Fatal(err)
 }
-if err := result.Decode(&out); err != nil {
-    log.Fatal(err)
+instance, err := minizinc.NewInstance(model, solver)
+if err != nil {
+	log.Fatal(err)
 }
 ```
 
-### Typed Errors
+`ListSolvers`, `FindBestSolver`, and `FindSolverForModelWithWarnings` expose the
+same discovery data for custom selection policies.
 
-CLI failures unwrap to `*minizinc.MinizincError` which exposes the stage,
-verbatim stderr and exit code so callers can branch on the underlying cause:
+## Solving
+
+`Solve` returns the last solution and terminal status:
 
 ```go
-var mzErr *minizinc.MinizincError
-if errors.As(err, &mzErr) {
-    log.Printf("minizinc %s failed (exit %d): %s", mzErr.Stage, mzErr.ExitCode, mzErr.Stderr)
+result, err := instance.Solve(ctx, minizinc.WithParams(minizinc.Params{"n": 10}))
+if err != nil {
+	log.Fatal(err)
 }
 ```
 
-Categories make programmatic branching simpler:
+`SolveAll` collects all reported solutions. Use `WithNumSolutions` to cap the
+result count:
 
 ```go
-switch {
-case errors.Is(err, minizinc.ErrSyntax), errors.Is(err, minizinc.ErrType):
-    // bug in the model
-case errors.Is(err, minizinc.ErrRuntime):
-    // solver crashed
+results, err := instance.SolveAll(ctx,
+	minizinc.WithParams(minizinc.Params{"n": 10}),
+	minizinc.WithNumSolutions(20),
+)
+if err != nil {
+	log.Fatal(err)
 }
-```
-
-**Note on timeouts**: MiniZinc's `--time-limit` (set via `WithTimeLimit`)
-expires with `exit=0` and may omit the terminal status after emitting feasible
-solutions. No error is raised, so check `result.HitTimeLimit` after a bounded
-solve.
-`ErrTimeout` remains for solver-emitted timeout messages that some
-configurations do produce on stderr.
-
-### Getting All Solutions
-
-```go
-results, err := instance.SolveAll(ctx)
 for _, result := range results {
-    fmt.Println(result.Solution)
+	fmt.Println(result.Solution)
 }
 ```
 
-### Streaming Solutions
+`SolveStream` emits solutions as MiniZinc produces them. Stream failures are
+returned through `Result.Error`:
 
 ```go
-for result := range instance.SolveStream(ctx) {
-    if result.Error != nil {
-        log.Fatal(result.Error)
-    }
-    if result.IsIntermediate {
-        fmt.Printf("improving: x=%v\n", result.Solution["x"])
-        continue
-    }
-    fmt.Printf("final %s: x=%v\n", result.Status, result.Solution["x"])
+for result := range instance.SolveStream(ctx, minizinc.WithParams(minizinc.Params{"n": 10})) {
+	if result.Error != nil {
+		log.Fatal(result.Error)
+	}
+	var solution struct {
+		X int `json:"x"`
+	}
+	if err := result.Decode(&solution); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("intermediate=%t x=%d\n", result.IsIntermediate, solution.X)
 }
 ```
 
-### Solve Options
+Solve calls on one `Instance` are serialized. Create separate instances from
+the same model when solves must run in parallel.
+
+## Results and Output
+
+`Result.Decode` is the usual way to read a known solution shape. For dynamic
+models, use `Get`, `GetInt`, `GetFloat`, `GetBool`, `GetString`, or `GetArray`.
+
+Native MiniZinc JSON output is enabled by default. `Result.Solution` contains
+the decoded variables. Models with custom output sections can also use:
+
+- `Result.Section(name)` for string-valued sections
+- `Result.Output` for raw output values
+- `Result.SectionOrder` for the order reported by MiniZinc
+
+Select DZN or item output when required by an existing model:
 
 ```go
-result, err := instance.Solve(ctx,
-    minizinc.WithAllSolutions(),
-    minizinc.WithTimeLimit(30*time.Second),
-    minizinc.WithProcesses(4),
-    minizinc.WithOptimizationLevel(3),
-    minizinc.WithVerbose(),
-)
+result, err := instance.Solve(ctx, minizinc.WithOutputMode(minizinc.OutputModeDZN))
+if err != nil {
+	log.Fatal(err)
+}
 ```
 
-## Building Models Programmatically
+Request solver statistics with `WithStatistics`. Common fields are available
+on `Result.Statistics`; solver-specific values remain in
+`Result.Statistics.Raw`.
 
-Instead of pasting MiniZinc as strings, use the typed `Builder` API:
+## Errors and Cancellation
+
+Process failures are returned as `*minizinc.MinizincError` with the failing
+stage, exit code, stderr, and a coarse category:
 
 ```go
-b := minizinc.NewBuilder()
+var processError *minizinc.MinizincError
+if errors.As(err, &processError) {
+	log.Printf("stage=%s exit=%d stderr=%s", processError.Stage, processError.ExitCode, processError.Stderr)
+}
 
-n := b.IntParam("n")
-queens := b.IntArrayVarSized("queens", n, 1, 8)
-
-b.Constraint(b.AllDifferent(queens))
-
-i, j := minizinc.Var("i"), minizinc.Var("j")
-b.Constraint(minizinc.Forall(i, minizinc.Range(minizinc.Int(1), n),
-    minizinc.Forall(j, minizinc.Range(i.Add(minizinc.Int(1)), n),
-        queens.At(i).Add(i).Ne(queens.At(j).Add(j)).
-            And(queens.At(i).Sub(i).Ne(queens.At(j).Sub(j))))))
-b.Satisfy()
-
-model := b.Build()
+switch {
+case errors.Is(err, minizinc.ErrSyntax):
+	log.Print("invalid model syntax")
+case errors.Is(err, minizinc.ErrType):
+	log.Print("invalid model types")
+case errors.Is(err, minizinc.ErrRuntime):
+	log.Print("solver runtime failure")
+}
 ```
 
-Identifier collisions and invalid names panic at build time, not at solve
-time. Generated code is plain MiniZinc — `model.AddString` still works for
-fragments the DSL does not cover, and `Builder.Include` registers extra
-include files.
-
-### Comprehensions and Generators
+Context cancellation stops the MiniZinc process and returns the context error
+from `Solve` and `SolveAll`. `WithTimeLimit` sets MiniZinc's own search limit;
+check `Result.HitTimeLimit` because MiniZinc may return a feasible solution
+without a terminal status:
 
 ```go
-i, j := minizinc.Var("i"), minizinc.Var("j")
-// [i*2 | i in 1..n where (i mod 2 = 0)]
-even := minizinc.Comprehension(i.Mul(minizinc.Int(2)),
-    minizinc.InWhere(i, minizinc.Range(minizinc.Int(1), n),
-        i.Mod(minizinc.Int(2)).Eq(minizinc.Int(0))))
-
-// forall(i in 1..n, j in 1..n where i < j)(queens[i] != queens[j])
-b.Constraint(minizinc.ForallG(
-    queens.At(i).Ne(queens.At(j)),
-    minizinc.In(i, minizinc.Range(minizinc.Int(1), n)),
-    minizinc.InWhere(j, minizinc.Range(minizinc.Int(1), n), i.Lt(j)),
-))
+result, err := instance.Solve(ctx, minizinc.WithTimeLimit(2*time.Second))
+if err != nil {
+	log.Fatal(err)
+}
+if result.HitTimeLimit {
+	log.Print("search stopped at the time limit")
+}
 ```
 
-`ConjOf` / `DisjOf` collapse a list of expressions into a single boolean,
-which is handy for multi-constraint `forall` bodies.
+`WithCancelGrace` changes the Unix grace period between termination and forced
+kill.
 
-### Required Parameter Validation
+## Builder and Escape Hatches
 
-Parameters declared via `IntParam` / `FloatParam` / `BoolParam` /
-`IntSetParam` / `IntArrayParamSized` are tracked as required. `Solve` returns
-a `*MissingParamsError` listing the unset names before any subprocess runs.
-Inspect ahead of time with `model.MissingParams()`.
-
-## Solver-Specific Options
-
-Pass typed structs instead of raw flags via `WithExtraArgs`:
+The optional `Builder` API covers common declarations, expressions,
+comprehensions, search annotations, and solve items:
 
 ```go
-instance.Solve(ctx,
-    minizinc.WithSolverOptions(minizinc.GecodeOptions{
-        RestartStrategy: "luby",
-        RestartScale:    100,
-        NodeLimit:       50_000,
-    }),
-)
+builder := minizinc.NewBuilder()
+n := builder.IntParam("n")
+x := builder.IntArrayVarSized("x", n, 1, 20)
+builder.Constraint(builder.AllDifferent(x))
+builder.Satisfy()
+model := builder.Build()
 ```
 
-`ChuffedOptions` and `CoinBCOptions` are also provided; implement
-`SolverOptions` to plug in your own.
+The generated model remains a normal `Model`, so unsupported syntax can be
+added with `AddString`. Lower-level integrations can use `WithExtraArgs`,
+`WithSolverOptions`, `WithModelViaStdin`, `WithCommandHook`, and a custom
+`Driver`.
 
-## Model via stdin
+## Compatibility
 
-By default the assembled model is written to a temporary `.mzn` file. Pass
-`WithModelViaStdin()` to stream it through `--input-from-stdin` instead —
-the option avoids the tmp file (and its lifecycle bookkeeping) at the cost
-of requiring MiniZinc ≥ 2.6's stdin support.
-
-## Output Sections
-
-Solutions use MiniZinc's native JSON output mode by default. This preserves
-integers, floats, booleans, arrays, sets, enums, optional values, tuples and
-records in the representation produced by the installed MiniZinc version.
-Select another native mode with `WithOutputMode(OutputModeDZN)` or
-`WithOutputMode(OutputModeItem)`.
-
-When the model uses MiniZinc's `output [...]` or `output_to_section()`,
-every string-valued section reaches `Result.Sections`. Access with
-`result.Section("explain")`. `Result.Output` retains every raw section,
-including JSON-valued sections, and `Result.SectionOrder` preserves the order
-reported by MiniZinc.
-
-## Cooperative Cancellation
-
-By default the driver gives MiniZinc two seconds to flush statistics and
-exit cleanly after the context is cancelled before SIGKILL. Override with
-`WithCancelGrace(d)`.
+- Go 1.21+ and MiniZinc 2.6+ are supported by the public API and CLI driver.
+- Process execution and temporary model/data files are portable across macOS,
+  Linux, and Windows; available solvers depend on the MiniZinc installation.
+- Each solve launches a MiniZinc process. Reusing an `Instance` avoids API
+  setup, but it is not incremental compilation or solver-state reuse.
+- JSON values and output details follow the installed MiniZinc version and the
+  selected solver.
 
 ## Examples
 
-See [examples/](examples/) directory for complete examples:
+- [`examples/simple`](examples/simple) — explicit solver and one result
+- [`examples/nqueens`](examples/nqueens) — model parameters and arrays
+- [`examples/streaming`](examples/streaming) — streamed solutions
+- [`examples/auto_solver`](examples/auto_solver) — automatic solver selection
+- [`examples/builder_nqueens`](examples/builder_nqueens) — Builder DSL
 
-- [simple](examples/simple/) - Basic usage
-- [auto_solver](examples/auto_solver/) - Automatic solver selection
-- [builder_nqueens](examples/builder_nqueens/) - 8-queens via the typed DSL
-
-## API Reference
-
-### Core Types
-
-- `Driver` - MiniZinc executable interface
-- `Model` - Constraint model representation
-- `Solver` - Solver configuration
-- `Instance` - Model instance with data
-- `Result` - Solution results
-
-### Key Methods
-
-**Model:**
-- `AddString(code string)` - Add MiniZinc code
-- `AddFile(path string) error` - Load from file
-- `SetParam(name string, value interface{}) error` - Set parameter
-- `Copy() *Model` - Create copy
-
-**Instance:**
-- `NewInstance(model *Model, solver *Solver) (*Instance, error)` - Create instance with specific solver
-- `NewInstanceAuto(model *Model) (*Instance, error)` - Create instance with automatic solver selection
-- `Solve(ctx context.Context, opts ...SolveOption) (*Result, error)` - Find one solution
-- `SolveAll(ctx context.Context, opts ...SolveOption) ([]*Result, error)` - Find all solutions
-- `SolveStream(ctx context.Context, opts ...SolveOption) <-chan *Result` - Stream solutions via channel
-- `SetParam(name string, value interface{}) error` - Set model parameter
-- `GetParam(name string) (interface{}, bool)` - Get model parameter
-- `Cleanup() error` - Remove temporary files
-
-**Result:**
-- `Get(name string) (any, bool)` - Get raw value
-- `GetInt(name string) (int, error)` - Get integer
-- `GetFloat(name string) (float64, error)` - Get float
-- `GetBool(name string) (bool, error)` - Get boolean
-- `GetString(name string) (string, error)` - Get string
-- `GetArray(name string) ([]any, error)` - Get array
-- `Decode(dst any) error` - Decode the solution map into a struct via `json:` tags
-
-**Result fields:**
-- `Status` - Solution status (OPTIMAL_SOLUTION, UNSATISFIABLE, etc.)
-- `Solution` - Map of variable names to values
-- `Statistics` - Solver statistics
-- `Statistics.Raw` - All solver-specific statistics
-- `Output` - Raw JSON-stream output sections
-- `SectionOrder` - Output section order reported by MiniZinc
-- `HitTimeLimit` - Whether a bounded search ended before completion
-- `Error` - Error that occurred during solving (used in SolveStream)
-
-### Solve Options
-
-- `WithAllSolutions()` - Find all solutions
-- `WithNumSolutions(n int)` - Limit number of solutions
-- `WithTimeLimit(d time.Duration)` - Set time limit
-- `WithProcesses(n int)` - Set parallel processes
-- `WithRandomSeed(seed int)` - Set random seed
-- `WithFreeSearch()` - Use free search
-- `WithOptimizationLevel(level int)` - Set optimization level (0-5)
-- `WithOutputMode(mode OutputMode)` - Select JSON, DZN or item solution output
-- `WithVerbose()` - Enable verbose output
-- `WithStatistics()` - Enable statistics
-- `WithExtraArgs(args ...string)` - Add custom arguments
-- `WithCommandHook(func([]string))` - Inspect the final CLI argv before exec
-
-## Smart Solver Selection
-
-The library includes intelligent solver selection that analyzes your model to choose the best solver automatically:
-
-```go
-model := minizinc.NewModel()
-model.AddString(`
-    array[1..n] of var 1..n: queens;
-    constraint alldifferent(queens);
-    solve satisfy;
-`)
-
-instance, err := minizinc.NewInstanceAuto(model)
-```
-
-### What gets analyzed:
-
-- **Solve type**: satisfy, minimize, or maximize
-- **Global constraints**: alldifferent, circuit, cumulative, etc.
-- **Scheduling constraints**: cumulative, disjunctive
-- **Set constraints**: set operations
-- **Float variables**: float type detection
-- **Model size**: small, medium, or large
-
-### Solver scoring:
-
-The library scores each solver based on:
-- Support for required constraints
-- Problem type (CP vs MIP vs SAT)
-- Optimization capabilities
-- Model size and parallelization support
+Complete symbol documentation is available through
+[`go doc`](https://pkg.go.dev/github.com/Malomalsky/go-minizinc).
 
 ## Testing
 
 ```bash
-go test -v
+go test ./...
+go test -race ./...
+go vet ./...
 ```
 
-## License
-
-MIT
+Tests that require MiniZinc or a particular solver skip when it is unavailable.

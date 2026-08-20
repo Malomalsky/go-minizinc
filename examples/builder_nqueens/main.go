@@ -34,16 +34,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := instance.SetParam("n", 8); err != nil {
-		log.Fatal(err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	result, err := instance.Solve(ctx, minizinc.WithCommandHook(func(args []string) {
-		fmt.Printf("argv: %v\n", args)
-	}))
+	result, err := instance.Solve(ctx,
+		minizinc.WithParams(minizinc.Params{"n": 8}),
+		minizinc.WithCommandHook(func(args []string) {
+			fmt.Printf("argv: %v\n", args)
+		}),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}

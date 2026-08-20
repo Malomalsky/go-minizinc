@@ -1,7 +1,3 @@
-// Streaming example. NOTE: COIN-BC is a MIP solver and does not enumerate
-// all solutions for satisfaction problems — for `solve satisfy` it returns
-// only the first solution and prints a warning to stderr. To see every
-// solution use a CP solver such as Gecode or Chuffed via FindSolver.
 package main
 
 import (
@@ -14,13 +10,12 @@ import (
 )
 
 func main() {
-	solver, err := minizinc.FindSolver("coin-bc")
+	solver, err := minizinc.FindSolver("gecode")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	model := minizinc.NewModel()
-	model.AddString("var 1..10: x; var 1..10: y; constraint x + y = 10; solve satisfy;")
+	model := minizinc.NewModel("var 1..10: x; var 1..10: y; constraint x + y = 10; solve satisfy;")
 
 	instance, err := minizinc.NewInstance(model, solver)
 	if err != nil {
@@ -33,9 +28,18 @@ func main() {
 	fmt.Println("Finding all solutions where x + y = 10:")
 	count := 0
 	for result := range instance.SolveStream(ctx) {
+		if result.Error != nil {
+			log.Fatal(result.Error)
+		}
 		count++
-		x, _ := result.GetInt("x")
-		y, _ := result.GetInt("y")
+		x, err := result.GetInt("x")
+		if err != nil {
+			log.Fatal(err)
+		}
+		y, err := result.GetInt("y")
+		if err != nil {
+			log.Fatal(err)
+		}
 		fmt.Printf("Solution %d: x=%d, y=%d\n", count, x, y)
 	}
 
