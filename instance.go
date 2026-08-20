@@ -81,15 +81,15 @@ func (inst *Instance) GetParam(name string) (any, bool) {
 // Solve runs the solver and returns the last solution along with the final
 // status and statistics.
 func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, error) {
-	options := &SolveOptions{}
-	for _, opt := range opts {
-		opt(options)
+	options, err := applySolveOptions(opts...)
+	if err != nil {
+		return nil, err
 	}
 
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
-	if err := inst.checkRequiredParamsLocked(); err != nil {
+	if err := inst.checkRequiredParamsLocked(options.params); err != nil {
 		return nil, err
 	}
 
@@ -157,9 +157,9 @@ func (inst *Instance) Solve(ctx context.Context, opts ...SolveOption) (*Result, 
 
 // SolveAll returns every solution the solver reports.
 func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Result, error) {
-	options := &SolveOptions{}
-	for _, opt := range opts {
-		opt(options)
+	options, err := applySolveOptions(opts...)
+	if err != nil {
+		return nil, err
 	}
 
 	if options.NumSolutions == 0 && !options.AllSolutions {
@@ -169,7 +169,7 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
-	if err := inst.checkRequiredParamsLocked(); err != nil {
+	if err := inst.checkRequiredParamsLocked(options.params); err != nil {
 		return nil, err
 	}
 
@@ -245,24 +245,27 @@ func (inst *Instance) SolveAll(ctx context.Context, opts ...SolveOption) ([]*Res
 // SolveStream emits solutions on the returned channel as they are produced. The
 // channel is closed when the solver finishes or ctx is canceled.
 func (inst *Instance) SolveStream(ctx context.Context, opts ...SolveOption) <-chan *Result {
+	options, err := applySolveOptions(opts...)
+	if err != nil {
+		ch := make(chan *Result, 1)
+		ch <- &Result{Status: StatusError, Error: err}
+		close(ch)
+		return ch
+	}
+
+	if options.NumSolutions == 0 && !options.AllSolutions {
+		options.AllSolutions = true
+	}
+
 	ch := make(chan *Result)
 
 	go func() {
 		defer close(ch)
 
-		options := &SolveOptions{}
-		for _, opt := range opts {
-			opt(options)
-		}
-
-		if options.NumSolutions == 0 && !options.AllSolutions {
-			options.AllSolutions = true
-		}
-
 		inst.mu.Lock()
 		defer inst.mu.Unlock()
 
-		if err := inst.checkRequiredParamsLocked(); err != nil {
+		if err := inst.checkRequiredParamsLocked(options.params); err != nil {
 			select {
 			case ch <- &Result{Status: StatusError, Error: err}:
 			case <-ctx.Done():
@@ -436,7 +439,7 @@ func (inst *Instance) buildArgsLocked(options *SolveOptions) ([]string, []byte, 
 		args = append(args, "-I", includeDir)
 	}
 
-	dataJSON, err := inst.model.getDataJSON()
+	dataJSON, err := inst.model.getDataJSON(options.params)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -554,8 +557,8 @@ func hitTimeLimit(options *SolveOptions, finalStatus Status, solutions int, solv
 	return options.AllSolutions || solveType != SolveTypeSatisfy
 }
 
-func (inst *Instance) checkRequiredParamsLocked() error {
-	missing := inst.model.MissingParams()
+func (inst *Instance) checkRequiredParamsLocked(params Params) error {
+	missing := inst.model.missingParams(params)
 	if len(missing) > 0 {
 		return &MissingParamsError{Missing: missing}
 	}

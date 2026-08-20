@@ -105,6 +105,80 @@ func TestModelRejectsCyclicParameter(t *testing.T) {
 	}
 }
 
+func TestWithParamsSnapshotsValues(t *testing.T) {
+	values := []int{1, 2}
+	params := Params{"n": 2, "values": values}
+	options, err := applySolveOptions(
+		WithParams(Params{"first": 1, "n": 1}),
+		WithParams(params),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values[0] = 9
+	params["n"] = 3
+	if options.params["first"] != 1 || options.params["n"] != 2 || options.params["values"].([]int)[0] != 1 {
+		t.Fatalf("parameters were not isolated: %+v", options.params)
+	}
+}
+
+func TestSolveParamsOverrideDefaults(t *testing.T) {
+	model := NewModel()
+	if err := model.SetParam("n", 1); err != nil {
+		t.Fatal(err)
+	}
+	data, err := model.getDataJSON(Params{"n": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data != `{"n":2}` {
+		t.Fatalf("got %s", data)
+	}
+	value, _ := model.GetParam("n")
+	if value != 1 {
+		t.Fatalf("default changed to %v", value)
+	}
+}
+
+func TestSolveParamsSatisfyRequiredParams(t *testing.T) {
+	builder := NewBuilder()
+	builder.IntParam("n")
+	model := builder.Build()
+	if missing := model.missingParams(Params{"n": 8}); len(missing) != 0 {
+		t.Fatalf("got %v", missing)
+	}
+}
+
+func TestWithParamsRejectsInvalidValue(t *testing.T) {
+	cyclic := map[string]any{}
+	cyclic["self"] = cyclic
+	if _, err := applySolveOptions(WithParams(Params{"bad": cyclic})); err == nil {
+		t.Fatal("expected parameter validation error")
+	}
+}
+
+func TestSolveMethodsRejectInvalidParams(t *testing.T) {
+	cyclic := map[string]any{}
+	cyclic["self"] = cyclic
+	option := WithParams(Params{"bad": cyclic})
+	instance := &Instance{}
+
+	if _, err := instance.Solve(context.Background(), option); err == nil {
+		t.Fatal("Solve accepted invalid parameters")
+	}
+	if _, err := instance.SolveAll(context.Background(), option); err == nil {
+		t.Fatal("SolveAll accepted invalid parameters")
+	}
+	results := instance.SolveStream(context.Background(), option)
+	result, ok := <-results
+	if !ok || result.Error == nil || result.Status != StatusError {
+		t.Fatalf("got %+v, open=%v", result, ok)
+	}
+	if _, ok := <-results; ok {
+		t.Fatal("stream emitted more than one result")
+	}
+}
+
 func TestModelAddFileTracksPaths(t *testing.T) {
 	dir := t.TempDir()
 	modelPath := filepath.Join(dir, "model.MZN")

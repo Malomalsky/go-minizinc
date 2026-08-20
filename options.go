@@ -1,6 +1,11 @@
 package minizinc
 
-import "time"
+import (
+	"maps"
+	"time"
+)
+
+type Params map[string]any
 
 type OutputMode string
 
@@ -30,6 +35,7 @@ type SolveOptions struct {
 	HasCancelGrace       bool
 	ModelViaStdin        bool
 	OutputMode           OutputMode
+	params               Params
 }
 
 // defaultCancelGrace is the time we give MiniZinc to flush stats and exit
@@ -90,6 +96,15 @@ func WithOutputMode(mode OutputMode) SolveOption {
 	}
 }
 
+func WithParams(params Params) SolveOption {
+	return func(o *SolveOptions) {
+		if o.params == nil {
+			o.params = make(Params)
+		}
+		maps.Copy(o.params, params)
+	}
+}
+
 func WithVerbose() SolveOption {
 	return func(o *SolveOptions) {
 		o.Verbose = true
@@ -138,4 +153,22 @@ func WithModelViaStdin() SolveOption {
 	return func(o *SolveOptions) {
 		o.ModelViaStdin = true
 	}
+}
+
+func applySolveOptions(opts ...SolveOption) (*SolveOptions, error) {
+	options := &SolveOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(options)
+		}
+	}
+	if err := validateSolveOptions(options); err != nil {
+		return nil, err
+	}
+	params, err := cloneParams(options.params)
+	if err != nil {
+		return nil, err
+	}
+	options.params = params
+	return options, nil
 }

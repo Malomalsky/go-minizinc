@@ -136,15 +136,31 @@ func (m *Model) Copy() *Model {
 // assigned via SetParam. Empty result means the model is ready to solve as
 // far as Builder-recorded requirements go.
 func (m *Model) MissingParams() []string {
+	return m.missingParams(nil)
+}
+
+func (m *Model) missingParams(params Params) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var missing []string
 	for _, name := range m.requiredParams {
 		if !m.assigned[name] {
-			missing = append(missing, name)
+			if _, ok := params[name]; !ok {
+				missing = append(missing, name)
+			}
 		}
 	}
 	return missing
+}
+
+func cloneParams(params Params) (Params, error) {
+	if len(params) == 0 {
+		return nil, nil
+	}
+	if _, err := json.Marshal(params); err != nil {
+		return nil, wrapError("invalid parameter value", err)
+	}
+	return deepCopyValue(params).(Params), nil
 }
 
 func deepCopyValue(v any) any {
@@ -225,15 +241,20 @@ func (m *Model) getCode() string {
 	return sb.String()
 }
 
-func (m *Model) getDataJSON() (string, error) {
+func (m *Model) getDataJSON(params Params) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if len(m.parameters) == 0 {
+	merged := maps.Clone(m.parameters)
+	if merged == nil {
+		merged = make(map[string]any)
+	}
+	maps.Copy(merged, params)
+	if len(merged) == 0 {
 		return "", nil
 	}
 
-	data, err := json.Marshal(m.parameters)
+	data, err := json.Marshal(merged)
 	if err != nil {
 		return "", wrapError("failed to marshal parameters", err)
 	}

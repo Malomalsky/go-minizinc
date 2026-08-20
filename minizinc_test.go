@@ -179,6 +179,56 @@ func TestSolveWithParams(t *testing.T) {
 	}
 }
 
+func TestSolveScopedParams(t *testing.T) {
+	solver, err := FindSolver("gecode")
+	if err != nil {
+		t.Skipf("solver not found: %v", err)
+	}
+
+	model := NewModel()
+	model.AddString("int: n; var 1..n: x; solve satisfy;")
+	if err := model.SetParam("n", 1); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := NewInstance(model, solver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := instance.Solve(ctx, WithParams(Params{"n": 2}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x, err := result.GetInt("x"); err != nil || x < 1 || x > 2 {
+		t.Fatalf("x=%d, err=%v", x, err)
+	}
+
+	results, err := instance.SolveAll(ctx, WithParams(Params{"n": 2}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d solutions", len(results))
+	}
+
+	params := Params{"n": 3}
+	stream := instance.SolveStream(ctx, WithParams(params))
+	params["n"] = 1
+	count := 0
+	for result := range stream {
+		if result.Error != nil {
+			t.Fatal(result.Error)
+		}
+		count++
+	}
+	if count != 3 {
+		t.Fatalf("got %d streamed solutions", count)
+	}
+}
+
 func TestSolveAll(t *testing.T) {
 	solver, err := FindSolver("coin-bc")
 	if err != nil {
