@@ -3,6 +3,7 @@ package minizinc
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -83,13 +84,23 @@ func TestBuilder_DuplicateIdentifierPanics(t *testing.T) {
 }
 
 func TestBuilder_InvalidIdentifierPanics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic on invalid identifier")
-		}
-	}()
-	b := NewBuilder()
-	b.IntVar("123bad", 1, 10)
+	for _, name := range []string{"123bad", "_", "_1", "__x", "default", "infinity", "solve", "type", "variant_record"} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatal("expected panic on invalid identifier")
+				}
+			}()
+			NewBuilder().IntVar(name, 1, 10)
+		})
+	}
+}
+
+func TestBuilder_ValidIdentifiers(t *testing.T) {
+	builder := NewBuilder()
+	for _, name := range []string{"op", "_x", "x_1"} {
+		builder.IntVar(name, 1, 10)
+	}
 }
 
 func TestExpr_Operators(t *testing.T) {
@@ -134,6 +145,25 @@ func TestFormatFloat(t *testing.T) {
 		if got := formatFloat(tc.v); got != tc.want {
 			t.Errorf("formatFloat(%v) = %q, want %q", tc.v, got, tc.want)
 		}
+	}
+}
+
+func TestFormatFloatRejectsNonFiniteValues(t *testing.T) {
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		func() {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("expected panic for %v", value)
+				}
+			}()
+			Float(value)
+		}()
+	}
+}
+
+func TestSumAcceptsArrayExpression(t *testing.T) {
+	if got := Sum(Var("xs")).String(); got != "sum(xs)" {
+		t.Fatalf("got %q", got)
 	}
 }
 

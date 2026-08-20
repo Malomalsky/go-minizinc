@@ -2,6 +2,7 @@ package minizinc
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -32,10 +33,26 @@ func NewBuilder() *Builder {
 	}
 }
 
-var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var identRe = regexp.MustCompile(`^_?[A-Za-z][A-Za-z0-9_]*$`)
+
+func validIdentifier(name string) bool {
+	if !identRe.MatchString(name) {
+		return false
+	}
+	switch name {
+	case "ann", "annotation", "any", "array", "bool", "case", "constraint", "default",
+		"diff", "div", "else", "elseif", "endif", "enum", "false", "float", "function",
+		"if", "in", "include", "infinity", "int", "intersect", "let", "list", "maximize",
+		"minimize", "mod", "not", "of", "opt", "output", "par", "predicate", "record",
+		"satisfy", "set", "solve", "string", "subset", "superset", "symdiff", "test",
+		"then", "true", "tuple", "type", "union", "var", "variant_record", "where", "xor":
+		return false
+	}
+	return true
+}
 
 func (b *Builder) registerName(name, kind string) {
-	if !identRe.MatchString(name) {
+	if !validIdentifier(name) {
 		panic(fmt.Sprintf("minizinc: invalid identifier %q", name))
 	}
 	if prev, ok := b.names[name]; ok {
@@ -362,6 +379,9 @@ func op(a Expr, sym string, b Expr) Expr {
 
 // Sum returns sum(es...).
 func Sum(es ...Expr) Expr {
+	if len(es) == 1 {
+		return Expr{code: fmt.Sprintf("sum(%s)", es[0].code)}
+	}
 	return Expr{code: fmt.Sprintf("sum([%s])", strings.Join(exprCodes(es), ", "))}
 }
 
@@ -460,7 +480,7 @@ func (b *Builder) AllDifferent(args ...Expr) Expr {
 // Var declares a fresh identifier for use in Forall/Exists comprehensions
 // without registering it as a model-level name.
 func Var(name string) Expr {
-	if !identRe.MatchString(name) {
+	if !validIdentifier(name) {
 		panic(fmt.Sprintf("minizinc: invalid identifier %q", name))
 	}
 	return Expr{code: name}
@@ -477,6 +497,9 @@ func exprCodes(es []Expr) []string {
 // formatFloat renders a Go float64 in a form MiniZinc accepts as a float
 // literal: always with a decimal point so `1.0` does not collapse to `1`.
 func formatFloat(v float64) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		panic(fmt.Sprintf("minizinc: non-finite float %v", v))
+	}
 	s := strconv.FormatFloat(v, 'g', -1, 64)
 	if !strings.ContainsAny(s, ".eE") {
 		s += ".0"
